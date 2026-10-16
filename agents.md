@@ -20,6 +20,19 @@ It runs as a single HTML file, optionally with a small Python server that stores
 - There is no test suite in the repo yet. Past testing used jsdom + `fake-indexeddb` + Node's `webcrypto`, driving the real HTML.
   Adding such tests is welcome.
 
+## Deploy
+**GitHub Pages (static mode, no server):**
+1. Go to your repo → Settings → Pages
+2. Source: `main` branch, `/ (root)`
+3. App URL: `https://mukeshrvyas.github.io/build-ledger/`
+4. Data stays in the browser (localStorage). No server sync.
+
+**With sync server:**
+1. Run `server.py` on a machine with a stable HTTPS address:
+   `DATA_DIR=/var/build_ledger/data DOCS_DIR=/var/build_ledger/docs WEB_DIR=. python3 server.py`
+2. In the app, go to More → Settings → Server URL, enter your server address
+3. Data syncs across devices via the server (E2E encrypted, server never sees plaintext)
+
 ## Architecture of the app
 - State is one in-memory object `db`: `projects, items (each with lots), uses, costs, bills, tools, vendors, customers, purchases, docs (metadata only), set, company`.
   `norm()` fills defaults and migrates old data; call it after any load or import.
