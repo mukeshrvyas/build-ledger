@@ -66,6 +66,12 @@ Files are encrypted (`.enc`, 12-byte IV prefix) unless the user chooses readable
   need the `NDIR` constant changed (see the phone app README).
 - Home Assistant ingress URLs contain a temporary token, so the phone app needs a stable https address to the add-on's port.
 
+## Phase 1 features (implemented)
+- Company logo upload (max 250 KB, stored as data URL in encrypted `db.set.logo`, shown on invoices via `showBill()`)
+- Low-stock alerts: items have a `min` field; stock view shows a warning banner and a `⚠ low` indicator when `iq(i) < i.min`
+- Inventory merge prompt: `itemForm()` and `lineForm()` check `findItem()` and, on match, show a sheet offering "merge" (add lot to existing item) or "sep" (create separate item)
+- Company details sync/local-only toggle: `db.set.syncLocal` (checkbox on the More settings page, saved via `saveSet()`)
+
 ## Roadmap (not built)
 1. Local SQLite storage (sql.js) with an encrypted change log and a sync queue: local write, queue, push/pull through the server,
    newest-edit-wins merge. CR-SQLite and ElectricSQL were rejected because they merge by reading rows on the server, which breaks end-to-end encryption.
