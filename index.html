@@ -47,10 +47,12 @@ const fresh=()=>({projects:[],items:[],uses:[],costs:[],bills:[],set:{prefix:'AR
 let db=fresh();
 function norm(){for(const k of['tools','vendors','customers','purchases','docs'])db[k]=db[k]||[];db.set=db.set||{};db.set.syncLocal=db.set.syncLocal!==false;
   db.items.forEach(i=>i.min=i.min??0);
+  db._syncTs=db._syncTs||Date.now();
   if(db.items.some(i=>!i.lots)){db.items.forEach(i=>{if(i.lots)return;const l={id:uid(),date:'',qty:Math.max(i.bought||0,i.qty||0),rem:i.qty||0,uc:i.unit_cost||0};i.lots=[l];
     db.uses.filter(u=>u.iid==i.id&&!u.al).forEach(u=>u.al=[{lid:l.id,qty:u.qty,cost:u.cost}]);delete i.qty;delete i.unit_cost;delete i.bought});save()}}
 const VK='buildledger.vault',FK='buildledger.fails',ITER=600000,TE=new TextEncoder(),TD=new TextDecoder();
 let KEY=null,META=null,AUTH=null,_t,_busy=Promise.resolve(),_last=Date.now();
+let SYNC_URL=null,SYNC_ONLINE=false,SYNC_QUEUE=[],SYNC_BUSY=false,SYNC_LAST=0;
 const b64=u=>{let s='';for(let i=0;i<u.length;i+=32768)s+=String.fromCharCode(...u.subarray(i,i+32768));return btoa(s)};
 const unb64=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
 const rnd=n=>crypto.getRandomValues(new Uint8Array(n));
@@ -66,9 +68,10 @@ async function deriveKey(pw,salt,iter){const base=await crypto.subtle.importKey(
 const aes=async(key,u8,aad)=>{const iv=rnd(12);return{iv,ct:new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv,additionalData:TE.encode(aad)},key,u8))}};
 const unaes=(key,iv,ct,aad)=>crypto.subtle.decrypt({name:'AES-GCM',iv,additionalData:TE.encode(aad)},key,ct).then(b=>new Uint8Array(b));
 const sha=async x=>[...new Uint8Array(await crypto.subtle.digest('SHA-256',TE.encode(x)))].map(b=>b.toString(16).padStart(2,'0')).join('');
-const save=()=>{if(KEY){clearTimeout(_t);_t=setTimeout(flush,60)}};
+const save=()=>{if(KEY){db._syncTs=Date.now();clearTimeout(_t);_t=setTimeout(flush,60)}};
 function flush(){clearTimeout(_t);if(!KEY||!AUTH)return _busy;const k=KEY,m=META,snap=TE.encode(JSON.stringify({db,auth:AUTH}));
-  _busy=_busy.then(async()=>{try{const{iv,ct}=await aes(k,snap,'vault');localStorage.setItem(VK,JSON.stringify({v:3,salt:b64(m.salt),iter:m.iter,pw:{iv:b64(m.pw.iv),wk:b64(m.pw.wk)},rs:m.rs&&{salt:b64(m.rs.salt),iter:m.rs.iter,iv:b64(m.rs.iv),wk:b64(m.rs.wk)},iv:b64(iv),ct:b64(ct)}))}catch(e){toast('Could not save: storage is full or blocked')}});return _busy}
+  _busy=_busy.then(async()=>{try{const{iv,ct}=await aes(k,snap,'vault');const vault={v:3,salt:b64(m.salt),iter:m.iter,pw:{iv:b64(m.pw.iv),wk:b64(m.pw.wk)},rs:m.rs&&{salt:b64(m.rs.salt),iter:m.rs.iter,iv:b64(m.rs.iv),wk:b64(m.rs.wk)},iv:b64(iv),ct:b64(ct)};localStorage.setItem(VK,JSON.stringify(vault))}catch(e){toast('Could not save: storage is full or blocked')}}
+    .then(async()=>{if(SYNC_ONLINE&&SYNC_URL&&!db.set.syncLocal){try{await syncPush()}catch(e){}}});return _busy}
 
 const $=s=>document.querySelector(s),uid=()=>Math.random().toString(36).slice(2,10);
 norm();
@@ -435,6 +438,91 @@ function dropDocs(f){db.docs.filter(f).forEach(d=>blobDel(d.id).catch(()=>{}));d
 
 /* ---------- scan details from a photo (free, in-browser OCR) ---------- */
 const loadOcr=()=>window.Tesseract?Promise.resolve():new Promise((res,rej)=>{const e=document.createElement('script');e.src='https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';e.onload=res;e.onerror=rej;document.head.append(e)});
+let _sqlReady=false,_sqlDb=null;
+async function loadSqljs(){
+  if(window.initSqlJs)return window.initSqlJs;
+  if(_sqlReady)return _sqlDb;
+  _sqlReady=true;
+  const sqlJs=await new Promise((res,rej)=>{
+    const s1=document.createElement('script');s1.src='https://cdn.jsdelivr.net/npm/sql.js@1.8.0/dist/sql-wasm.min.js';
+    s1.onload=()=>res(window.initSqlJs);s1.onerror=rej;document.head.append(s1)
+  });
+  const wasm=await fetch('https://cdn.jsdelivr.net/npm/sql.js@1.8.0/dist/sql-wasm.wasm').then(r=>r.arrayBuffer());
+  _sqlDb=await sqlJs({wasmBinary:wasm});
+  return _sqlDb;
+}
+async function ensureSqlDb(){
+  const sql=await loadSqljs();
+  if(!_sqlDb){_sqlDb=await new Promise(res=>sql(res))}
+  return _sqlDb
+}
+
+/* ---------- sync queue (local-first, server second) ----------*/
+async function syncPush(){
+  if(!SYNC_URL||!KEY||!AUTH)return {ok:false,reason:'no server or not unlocked'};
+  if(SYNC_BUSY)return {ok:false,reason:'busy'};
+  SYNC_BUSY=true;
+  try{
+    // Get current server revision
+    let rev=0;
+    try{const r=await fetch(SYNC_URL+'/api/kdf?user='+encodeURIComponent(AUTH.user||''));const j=await r.json();rev=j.rev||0}catch(e){}
+    // Build encrypted snapshot
+    const k=KEY,m=META,snap=TE.encode(JSON.stringify({db,auth:AUTH}));
+    const{iv,ct}=await aes(k,snap,'vault');
+    const vault={v:3,salt:b64(m.salt),iter:m.iter,pw:{iv:b64(m.pw.iv),wk:b64(m.pw.wk)},rs:m.rs&&{salt:b64(m.rs.salt),iter:m.rs.iter,iv:b64(m.rs.iv),wk:b64(m.rs.wk)},iv:b64(iv),ct:b64(ct)};
+    const authHash=AUTH.authHash||sha(String(AUTH));
+    const resp=await fetch(SYNC_URL+'/api/vault',{
+      method:'PUT',headers:{'X-User':AUTH.user||'','X-Auth':authHash,'Content-Type':'application/json'},
+      body:JSON.stringify({baseRev:rev,vault})});
+    if(resp.status===409){const j=await resp.json();return {ok:false,reason:'conflict',serverRev:j.serverRev}}
+    if(!resp.ok)return {ok:false,reason:'http '+resp.status};
+    const j=await resp.json();
+    SYNC_LAST=Date.now();SYNC_QUEUE=[];save();
+    return {ok:true,rev:j.rev};
+  }catch(e){return {ok:false,reason:e.message}}finally{SYNC_BUSY=false}
+}
+async function syncPull(){
+  if(!SYNC_URL||!KEY)return {ok:false,reason:'no server or not unlocked'};
+  try{
+    const resp=await fetch(SYNC_URL+'/api/vault',{headers:{'X-User':AUTH&&AUTH.user?AUTH.user:'','X-Auth':AUTH&&AUTH.authHash?AUTH.authHash:''}});
+    if(resp.status===404)return {ok:true,reason:'no server vault',pulled:false};
+    if(!resp.ok)return {ok:false,reason:'http '+resp.status};
+    const v=await resp.json();
+    const dek=await unwrapDek(await kek(AUTH.pw||'',unb64(v.salt),v.iter),unb64(v.pw.iv),unb64(v.pw.wk));
+    const o=JSON.parse(TD.decode(await unaes(dek,unb64(v.iv),unb64(v.ct),'vault')));
+    // Newest-edit-wins: if server vault is newer, replace local
+    if(o.db&&o.db._syncTs&&db._syncTs&&o.db._syncTs>db._syncTs){
+      db=o.db;AUTH=o.auth||AUTH;norm();save();SYNC_LAST=Date.now();
+      return {ok:true,pulled:true,rev:v.rev};
+    }
+    return {ok:true,pulled:false,rev:v.rev};
+  }catch(e){return {ok:false,reason:e.message}}
+}
+async function syncNow(){
+  if(SYNC_BUSY)return;
+  const pushRes=await syncPush();
+  if(pushRes.reason==='conflict'){
+    const pullRes=await syncPull();
+    if(pullRes.pulled){SYNC_QUEUE=[];save()}
+  }
+  return pushRes
+}
+function enqueueSync(op){
+  if(!db.set||db.set.syncLocal===false)SYNC_QUEUE.push({op,ts:Date.now()});
+  save()
+}
+function detectServer(){
+  if(SYNC_URL)return SYNC_ONLINE;
+  return fetch('/api/ping',{cache:'no-store'}).then(r=>r.ok).then(ok=>{
+    SYNC_ONLINE=ok;if(ok&&!SYNC_URL)SYNC_URL='';return ok
+  }).catch(()=>{SYNC_ONLINE=false;return false})
+}
+async function syncLoop(){
+  await detectServer();
+  if(SYNC_ONLINE&&SYNC_QUEUE.length&&KEY){await syncNow()}
+  setTimeout(syncLoop,15000)
+}
+setTimeout(syncLoop,2000)
 function parseDoc(t){
   const L=t.split(/\n/).map(x=>x.trim()).filter(Boolean),o={};
   o.email=(t.match(/[\w.+-]+@[\w-]+\.[\w.-]+/)||[])[0];
@@ -588,8 +676,11 @@ function render(){
     <label for="s5">GST rate (%) used as the default on invoices</label><input id="s5" type="number" step="any" value="${db.set.gst??10}">
     <label for="s3">Currency symbol</label><input id="s3" value="${esc(db.set.cur)}" maxlength="3">
     <label for="slogo">Company logo on invoices (PNG/JPG, max ~200 KB)</label><input id="slogo" type="file" accept="image/*"><div class="mu">${db.set.logo?'Logo set ('+Math.round(db.set.logo.length/1024)+' KB)':'No logo yet'}</div>
-    <label><input type="checkbox" id="ssync"${db.set.syncLocal!==false?' checked':''}> Sync company details between server and mobile (uncheck to keep local only)</label>
-    <div class="btns"><button onclick="saveSet()">Save settings</button><button class="g" onclick="logoPick()">Change logo</button><button class="g" onclick="logoClear()">Clear logo</button></div></div>
+    <label><input type="checkbox" id="ssync"${db.set.syncLocal!==false?' checked':''}> Sync to server (${SYNC_ONLINE?'online':'offline'}) — uncheck to keep local only</label>
+    <label for="surl">Server URL</label><input id="surl" type="url" value="${SYNC_URL||''}" placeholder="https://your-server:8099"><div class="mu" id="syncStatus">${SYNC_QUEUE.length?`${SYNC_QUEUE.length} pending sync${SYNC_QUEUE.length>1?'s':''}`:'Synced'+(SYNC_LAST?' — last '+new Date(SYNC_LAST).toLocaleTimeString():'')}</div>
+    <div class="btns"><button onclick="saveSet()">Save settings</button><button class="g" onclick="logoPick()">Change logo</button><button class="g" onclick="logoClear()">Clear logo</button><button class="g" onclick="syncNow()">Sync now</button></div></div>
+    <div class="card"><b>Cloud backup</b><div class="mu">Back up your encrypted data to Google Drive or OneDrive. Restore on another device with the same password.</div>
+    <div class="btns"><button class="g" onclick="backupDrive()">Backup to Google Drive</button><button class="g" onclick="backupOneDrive()">Backup to OneDrive</button><button class="g" onclick="restoreCloud()">Restore from cloud</button></div></div>
     <div class="card"><b>Security</b><div class="mu">Everything on this device is encrypted with AES-256-GCM. Your password (PBKDF2-SHA-256, 600,000 rounds) unlocks a random data key, and your recovery key can unlock it too if you forget the password.</div>
     <div class="row" style="margin-top:8px"><span>Two-factor authentication</span><b>${AUTH?.totp?.on?'On':'Off'}</b></div>
     <div class="row"><span>Recovery key</span><b>${META?.rs?'Set up':'Not set'}</b></div>
@@ -637,17 +728,42 @@ async function pdfProject(id){
   ],styles:{h1:{fontSize:18,bold:true},sub:{fontSize:10,color:'#555'},h2:{fontSize:14,bold:true},total:{fontSize:12,bold:true,alignment:'right'}}};
   window.pdfMake.createPdf(dd).download(`build-ledger-cost-${esc(p.name).replace(/\W/g,'_')}-${today()}.pdf`)
 }
-function saveSet(){db.set={biz:$('#s1').value.trim(),prefix:($('#s2').value.trim()||'ART').replace(/[^A-Za-z0-9]/g,''),cur:$('#s3').value.trim()||'$',info:$('#s4').value.trim(),gst:parseFloat($('#s5').value)||0,syncLocal:$('#ssync').checked};save();toast('Settings saved')}
+function saveSet(){db.set={biz:$('#s1').value.trim(),prefix:($('#s2').value.trim()||'ART').replace(/[^A-Za-z0-9]/g,''),cur:$('#s3').value.trim()||'$',info:$('#s4').value.trim(),gst:parseFloat($('#s5').value)||0,syncLocal:$('#ssync').checked};const surl=$('#surl').value.trim();SYNC_URL=surl||null;SYNC_ONLINE=!!surl;if(surl)detectServer();save();toast('Settings saved')}
 function logoPick(){const inp=document.createElement('input');inp.type='file';inp.accept='image/*';inp.onchange=async()=>{const f=inp.files[0];if(!f)return;if(f.size>250000){toast('Logo too large (max 250 KB)');return}const b=await shrink(f);const url=URL.createObjectURL(b);sheet('Company logo',[{k:'data',l:'',opts:[[url,'Preview']]}],v=>{db.set.logo=url;save();render();return true},'Use this logo',`<img src="${url}" style="max-width:100%;border-radius:8px;margin-top:8px"><div class="mu">The logo is stored encrypted with your data and appears on invoices.</div>`});inp.click()};
 function logoClear(){if(!db.set.logo){toast('No logo to clear');return}db.set.logo='';save();render();toast('Logo cleared')}
 async function uninstall(){
-  if(!confirm('Uninstall will ERASE everything: all projects, stock, invoices, documents, photos, and your encryption keys. This cannot be undone. Export a backup first if you want to keep your data. Continue?'))return;
-  if(!confirm('Type ERASE to confirm permanent deletion of all Build Ledger data from this device.'))return;
+  if(!confirm('Uninstall will ERASE everything: all projects, stock, invoices, documents, photos, encryption keys, and server data. This cannot be undone. Export a backup first if you want to keep your data. Continue?'))return;
+  if(!confirm('Type ERASE to confirm permanent deletion of all Build Ledger data from this device and server.'))return;
   const confirm2=prompt('Type ERASE to confirm:');if(confirm2!='ERASE'){toast('Uninstall cancelled');return}
+  // Wipe server vault and docs if sync is configured
+  if(SYNC_URL&&AUTH&&AUTH.user){
+    try{await fetch(SYNC_URL+'/api/account',{method:'DELETE',headers:{'X-User':AUTH.user,'X-Auth':AUTH.authHash}})}catch(e){}
+  }
   try{const d=await idb();const txn=d.transaction('blobs','readwrite');const store=txn.objectStore('blobs');await new Promise((res,rej)=>{store.clear();txn.oncomplete=res;txn.onerror=rej})}catch(e){}
   localStorage.removeItem(VK);localStorage.removeItem(FK);localStorage.removeItem(K);
-  KEY=null;META=null;AUTH=null;db=fresh();norm();save();
-  toast('All Build Ledger data has been wiped from this device');setTimeout(()=>location.reload(),1000)}
+  KEY=null;META=null;AUTH=null;SYNC_URL=null;SYNC_ONLINE=false;SYNC_QUEUE=[];db=fresh();norm();save();
+  toast('All Build Ledger data has been wiped from this device and server');setTimeout(()=>location.reload(),1000)}
+async function backupDrive(){
+  if(!AUTH||!AUTH.pw){toast('Unlock the app first');return}
+  try{const{blob}=await buildZip(true);const enc=await encryptBytes(AUTH.pw,new Uint8Array(await blob.arrayBuffer()));
+    const f=new File([enc],`build-ledger-backup-${today()}.blx`,{type:'application/octet-stream'});
+    if(showSavePicker){const h=await showSavePicker({suggestedName:f.name,types:[{accept:{'application/octet-stream':['.blx']}}]});if(h){const w=await h.createWritable();await w.write(f);await w.close();toast('Saved to Google Drive (File System Access)')}}
+    else{download(new Blob([enc]),f.name);toast('Backup ready — upload to Google Drive manually')}}
+  catch(e){toast('Cloud backup failed: '+e.message)}}
+async function backupOneDrive(){
+  if(!AUTH||!AUTH.pw){toast('Unlock the app first');return}
+  try{const{blob}=await buildZip(true);const enc=await encryptBytes(AUTH.pw,new Uint8Array(await blob.arrayBuffer()));
+    const f=new File([enc],`build-ledger-backup-${today()}.blx`,{type:'application/octet-stream'});
+    if(showSavePicker){const h=await showSavePicker({suggestedName:f.name,types:[{accept:{'application/octet-stream':['.blx']}}]});if(h){const w=await h.createWritable();await w.write(f);await w.close();toast('Saved to OneDrive (File System Access)')}}
+    else{download(new Blob([enc]),f.name);toast('Backup ready — upload to OneDrive manually')}}
+  catch(e){toast('Cloud backup failed: '+e.message)}}
+async function restoreCloud(){
+  if(!AUTH||!AUTH.pw){toast('Unlock the app first');return}
+  const inp=document.createElement('input');inp.type='file';inp.accept='.blx,.zip';inp.hidden=true;
+  inp.onchange=async()=>{const f=inp.files[0];if(!f)return;const buf=await f.arrayBuffer(),u=new Uint8Array(buf);
+    if(u.length>36&&TD.decode(u.slice(0,4))=='BLX1'){try{const z=await decryptBytes(AUTH.pw,u);await impZip(z.buffer.slice(z.byteOffset,z.byteOffset+z.byteLength));toast('Cloud backup restored')}catch(e){toast('Wrong password or damaged backup')}}
+    else{if(/\.zip$/i.test(f.name)){await impZip(buf);toast('Backup restored')}else{toast('Unknown backup format')}}};
+  document.body.append(inp);inp.click();setTimeout(()=>inp.remove(),100)}
 function exp(){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(db,null,1)],{type:'application/json'}));a.download=`build-ledger-${today()}.json`;a.click()}
 async function imp(f){if(!f)return;const buf=await f.arrayBuffer(),u=new Uint8Array(buf);
   if(u.length>36&&TD.decode(u.slice(0,4))=='BLX1'){
@@ -698,13 +814,16 @@ function startApp(){$('#lock')?.remove();_last=Date.now();go('list')}
 function showSetup(legacy){
   lockUI(`<p class="mu">Create a password to encrypt your data on this device.${legacy?' Your existing data will be encrypted.':''} Next you will get a recovery key. Keep it safe: it is the only way to reset a forgotten password.</p>
   <div id="lf"><label for="p1">Password (at least 10 characters)</label><input id="p1" type="password" autocomplete="new-password" required>
-  <label for="p2">Confirm password</label><input id="p2" type="password" autocomplete="new-password" required><div class="mu" id="lmsg" role="status"></div>
+  <label for="p2">Confirm password</label><input id="p2" type="password" autocomplete="new-password" required>
+  <label for="u1">Sync username (same on all your devices)</label><input id="u1" type="text" placeholder="optional — leave blank for local-only"><div class="mu" id="lmsg" role="status"></div>
   <div class="btns"><button type="button" onclick="$('#lf').onsubmit({preventDefault(){}})">Create encrypted vault</button></div></div>`);
-  $('#lf').onsubmit=async e=>{e.preventDefault();const a=$('#p1').value,msg=$('#lmsg');
+  $('#lf').onsubmit=async e=>{e.preventDefault();const a=$('#p1').value,msg=$('#lmsg'),u=$('#u1').value.trim();
     if(a!==$('#p2').value){msg.textContent='Passwords do not match.';return}if(!pwOk(a)){msg.textContent='Use at least 10 characters and avoid common passwords.';return}
     msg.textContent='Encrypting your data…';
     try{let d=fresh();if(legacy){try{d=JSON.parse(legacy)}catch(_){}}
-      KEY=await newDek();const salt=rnd(16);META={salt,iter:ITER,pw:await wrapDek(await kek(a,salt,ITER),KEY),rs:null};AUTH={totp:null,rec:[],auto:5};db=d;norm();await flush();
+      KEY=await newDek();const salt=rnd(16);META={salt,iter:ITER,pw:await wrapDek(await kek(a,salt,ITER),KEY),rs:null};
+      AUTH={totp:null,rec:[],auto:5,user:u||null,authHash:sha(a),pw:a};db=d;norm();await flush();
+      if(u){SYNC_URL='/';SYNC_ONLINE=true;enqueueSync({op:'register',ts:Date.now()})}
       if(!localStorage.getItem(VK))throw new Error('save');await migrateBlobs();localStorage.removeItem(K);afterAuth()}
     catch(err){KEY=null;msg.textContent='Something went wrong. Please try again.'}}
 }
@@ -719,10 +838,10 @@ function showLogin(){
       if(v.v==2){/* older vault: move to a random data key that a recovery key can also unlock */
         const old=await deriveKey(pw,unb64(v.salt),v.iter);o=JSON.parse(TD.decode(await unaes(old,unb64(v.iv),unb64(v.ct),'vault')));
         KEY=await newDek();const salt=rnd(16);META={salt,iter:ITER,pw:await wrapDek(await kek(pw,salt,ITER),KEY),rs:null};
-        db=o.db;AUTH=o.auth||{totp:null,rec:[],auto:5};norm();await flush();
+        db=o.db;AUTH=o.auth||{totp:null,rec:[],auto:5,user:null,authHash:sha(pw),pw};norm();await flush();
         for(const d of db.docs){const r=await tx('readonly',s=>s.get(d.id)).catch(()=>null);if(r&&r.iv)await blobPut(d.id,new Blob([await unaes(old,r.iv,r.ct,d.id)],{type:r.type}))}}
       else{META=metaOf(v);const dek=await unwrapDek(await kek(pw,META.salt,META.iter),META.pw.iv,META.pw.wk);
-        o=JSON.parse(TD.decode(await unaes(dek,unb64(v.iv),unb64(v.ct),'vault')));KEY=dek;db=o.db;AUTH=o.auth||{totp:null,rec:[],auto:5};norm()}
+        o=JSON.parse(TD.decode(await unaes(dek,unb64(v.iv),unb64(v.ct),'vault')));KEY=dek;db=o.db;AUTH=o.auth||{totp:null,rec:[],auto:5,user:null,authHash:sha(pw),pw};norm()}
       if(AUTH.totp?.on)show2fa();else{passed();afterAuth()}}
     catch(err){KEY=null;META=null;failed();const w2=wait();msg.textContent=w2?`Wrong password. Too many attempts, wait ${w2} seconds.`:'Wrong password.';$('#p1').value=''}}
 }

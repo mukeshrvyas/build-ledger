@@ -59,11 +59,31 @@ Files are encrypted (`.enc`, 12-byte IV prefix) unless the user chooses readable
 - Keep the app a single file unless there is a strong reason; keep all user-facing text plain and friendly.
 - Currency, GST and date formats are Australian by default (dd/mm/yyyy parsing in scan, ABN, 10% GST default).
 
+## Phase 3 features (implemented)
+- server.py: Python stdlib server with api/ping, api/kdf, api/register, api/vault (GET/PUT with baseRev revision check, 409 on conflict), api/doc/<id>, api/blob/<id>, api/account. Stores only encrypted vaults, salts, auth hashes, revision counters, and files. Never sees passwords, recovery keys, DEK, or readable data.
+- Sync queue: `SYNC_QUEUE` array, `enqueueSync()`, `syncPush()`, `syncPull()`, `syncNow()`, `syncLoop()` retries every 15 seconds when server unreachable. Newest-edit-wins merge via `db._syncTs` timestamp.
+- SQLite (sql.js): `loadSqljs()` and `ensureSqlDb()` lazy-load sql.js from CDN (WASM). Available for structured storage; localStorage + IndexedDB remain the primary path.
+- Cloud backup: `backupDrive()` / `backupOneDrive()` encrypt export zip with login password and save via File System Access API (or download for manual upload). `restoreCloud()` imports .blx backup.
+- Clean uninstall: `uninstall()` wipes localStorage vault, IndexedDB blobs, server account (DELETE api/account), and all app data (triple "ERASE" confirmation). Reloads after wipe.
+- Server URL setting: `surl` field on More page; `SYNC_URL`/`SYNC_ONLINE` track connection state; sync status shown on settings card.
+
+## Roadmap (not built)
+1. Over-the-air app updates on the phone that keep stored data. Needs an update server hosting new index.html versions; app checks on startup and downloads if newer.
+2. Full SQL storage migration: replace localStorage primary path with sql.js encrypted tables. Requires build step to bundle sql.js WASM or careful lazy-loading.
+3. Native Google Drive / OneDrive OAuth integration (current backup uses File System Access API + manual upload).
+4. Home Assistant integration: pulling linked documents from phone into HA view without storing on server; per-section sync/local-only beyond company details.
+
 ## Phase 2 features (implemented)
 - PDF export: `pdfProject(id)` generates a cost breakdown PDF for a project (lazy-loads pdfmake from CDN). Button on project view.
 - Merge existing inventory materials: `mergeItems()` lets the user pick two stock items, merges lots, averages unit cost by remaining quantity, and re-points all uses/purchase lines to the kept item. Button on Stock tab.
 - Enhanced export with include/exclude documents: `exportEnc()` and `exportPlain()` offer a toggle to include or exclude photos/documents from the zip export. `buildZip(includeDocs)` accepts a boolean.
 - Clean uninstall: `uninstall()` wipes localStorage vault, IndexedDB blobs, and all app data (triple-confirmed with "ERASE"). Button on More page.
+
+## Phase 1 features (implemented)
+- Company logo upload (max 250 KB, stored as data URL in encrypted `db.set.logo`, shown on invoices via `showBill()`)
+- Low-stock alerts: items have a `min` field; stock view shows a warning banner and a `⚠ low` indicator when `iq(i) < i.min`
+- Inventory merge prompt: `itemForm()` and `lineForm()` check `findItem()` and, on match, show a sheet offering "merge" (add lot to existing item) or "sep" (create separate item)
+- Company details sync/local-only toggle: `db.set.syncLocal` (checkbox on the More settings page, saved via `saveSet()`)
 
 ## Known limits
 - 2FA is enforced in the app, not by the server. PBKDF2 is used because Argon2 is not built into browsers.
