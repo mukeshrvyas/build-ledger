@@ -166,6 +166,34 @@ function itemSheet(id){
   b.onclick=()=>{if(db.uses.some(u=>u.iid==id)||db.purchases.some(p=>p.lines.some(l=>l.iid==id))){toast('Item has history; it cannot be deleted');return}db.items=db.items.filter(x=>x.id!=id);save();close();render()};
   $('#sbody').append(b);
 }
+function mergeItems(){
+  const withStock=db.items.filter(i=>iq(i)>0);
+  if(withStock.length<2){toast('Need at least two items with stock to merge.');return}
+  sheet('Merge two stock items',[
+    {k:'keep',l:'Keep this item (others will be merged into it)',v:withStock[0].id,opts:withStock.map(i=>[i.id,`${i.name} — ${r4(iq(i))} ${esc(i.unit)} on hand`])},
+    {k:'into',l:'Merge this item into the kept one',v:'',opts:[]}
+  ],
+  v=>{if(v.keep==v.into){toast('Pick two different items');return false}
+    const keep=I(v.keep),into=I(v.into);if(!keep||!into)return false;
+    // Average unit cost across all remaining lots
+    const keepVal=ival(keep),keepQty=iq(keep),intoVal=ival(into),intoQty=iq(into);
+    const totQty=r4(keepQty+intoQty),totVal=r4(keepVal+intoVal);
+    // Re-point all uses from 'into' to 'keep'
+    db.uses.filter(u=>u.iid==into.id).forEach(u=>{u.iid=keep.id});
+    // Re-point all purchase lines from 'into' to 'keep'
+    db.purchases.forEach(p=>{p.lines.filter(l=>l.iid==into.id).forEach(l=>{l.iid=keep.id;l.desc=keep.name})});
+    // Move all lots from 'into' to 'into'
+    into.lots.forEach(l=>{l.id=uid();keep.lots.push(l)});
+    keep.min=Math.max(keep.min??0,into.min??0);
+    db.items=db.items.filter(x=>x.id!=into.id);
+    save();close();render();toast(`Merged '${esc(into.name)}' into '${esc(keep.name)}'. Combined: ${r4(totQty)} ${esc(keep.unit)} @ ${m(totQty>0?totVal/totQty:0)}`);return true},
+  'Merge','Averages unit cost across remaining quantities. All project costs and purchase lines are re-pointed to the kept item. Units must match.');
+  const optsKeep=withStock.map(i=>`<option value="${esc(i.id)}">${esc(i.name)} — ${r4(iq(i))} ${esc(i.unit)} on hand</option>`).join('');
+  $('#f_keep').innerHTML=optsKeep;
+  const updInto=()=>{const k=$('#f_keep').value;$('#f_into').innerHTML=withStock.filter(i=>i.id!=k).map(i=>`<option value="${esc(i.id)}">${esc(i.name)} — ${r4(iq(i))} ${esc(i.unit)} on hand</option>`).join('')};
+  updInto();
+  $('#f_keep').onchange=updInto;
+}
 const LIFE=[
 [/forstner/,100,'hours','Forstner bits stay sharp for roughly 100 hours in wood.'],
 [/spade bit|paddle bit/,30,'hours','Spade bits dull quickly, around 30 hours.'],
@@ -422,8 +450,19 @@ function parseDoc(t){
   const dm=t.match(/\b(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})\b/);
   if(dm){const y=dm[3].length==2?'20'+dm[3]:dm[3];o.date=`${y}-${dm[2].padStart(2,'0')}-${dm[1].padStart(2,'0')}`}
   return o}
+let _pdfReady=false;
+async function loadPdf(){
+  if(window.pdfMake)return true;
+  if(_pdfReady)return true;
+  _pdfReady=true;
+  await new Promise((res,rej)=>{
+    const s1=document.createElement('script');s1.src='https://cdn.jsdelivr.net/npm/pdfmake@0.1.72/build/pdfmake.min.js';
+    s1.onload=()=>{const s2=document.createElement('script');s2.src='https://cdn.jsdelivr.net/npm/pdfmake@0.1.72/build/vfs_fonts.js';s2.onload=res;s2.onerror=rej;document.head.append(s2)};
+    s1.onerror=rej;document.head.append(s1)
+  });
+  return true
+}
 function scanBtn(){const h=$('#sbody').querySelector('h2'),w=document.createElement('div');
-  w.innerHTML=`<button type="button" class="g" id="scbtn" style="width:100%;margin:8px 0">Scan details from a photo</button><input id="scin" type="file" accept="image/*" hidden><div class="mu" id="scst"></div>`;h.after(w);
   $('#scbtn').onclick=()=>$('#scin').click();
   $('#scin').onchange=async e=>{const f=e.target.files[0];if(!f)return;const st$=$('#scst');st$.textContent='Reading the photo. The first scan downloads the reader and needs internet.';
     try{await loadOcr();const r=await Tesseract.recognize(f,'eng'),o=parseDoc(r.data.text);
@@ -452,7 +491,7 @@ async function readZip(buf){const v=new DataView(buf),u=new Uint8Array(buf),dec=
     if(meth==8)data=new Uint8Array(await new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer());else if(meth!=0)throw new Error('zip');
     out[name]=data;p+=46+nl+xl+cl}return out}
 const csvS=(head,rows)=>[head,...rows].map(r=>r.map(x=>'"'+String(x??'').replace(/"/g,'""')+'"').join(',')).join('\r\n');
-async function buildZip(){
+async function buildZip(includeDocs=true){
   toast('Preparing export…');const enc=new TextEncoder(),F=[],add=(n,t)=>F.push({name:n,data:typeof t=='string'?enc.encode(t):t});
   try{const src=await (await fetch(location.href.split('#')[0].split('?')[0],{cache:'no-store'})).text();add('app/index.html',src)}catch(e){add('app/MISSING.txt','The app code could not be read automatically. Copy index.html from your server folder into this zip.')}
   add('data/backup.json',JSON.stringify(db,null,1));
@@ -467,10 +506,10 @@ async function buildZip(){
   add('csv/tools.csv',csvS(['Tool','Price','Lifetime','Unit','Used','Rate per unit'],db.tools.map(t=>[t.name,t.price,t.life,t.unit,t.used,t.rate])));
   for(const t of ['sales','cs','cd','pv','vd','pp','si','sv','gst']){const d=repData({type:t,from:'',to:'',vid:'',cid:'',st:''});add(`reports/${t}-${safe(d.title)}.csv`,csvS(d.head,d.rows))}
   let missing=0;const idx=[];
-  for(const d of db.docs){const r=await blobGet(d.id).catch(()=>null);if(!r){missing++;continue}
-    const path=`documents/${safe(d.no||d.kind)}/${d.id}__${safe(d.name)}`;add(path,new Uint8Array(await r.blob.arrayBuffer()));idx.push([d.no,d.kind,path,d.name,d.added])}
+  if(includeDocs&&db.docs.length){for(const d of db.docs){const r=await blobGet(d.id).catch(()=>null);if(!r){missing++;continue}
+    const path=`documents/${safe(d.no||d.kind)}/${d.id}__${safe(d.name)}`;add(path,new Uint8Array(await r.blob.arrayBuffer()));idx.push([d.no,d.kind,path,d.name,d.added])}}
   add('csv/documents_index.csv',csvS(['Linked to','Kind','File','Original name','Added'],idx));
-  add('README.txt',`Build Ledger export, ${today()}\r\n\r\napp/index.html      the app. Put it in any web folder (for Home Assistant: /config/www/artcost/) and open it.\r\ndata/backup.json    all data. Used when importing.\r\ncsv/                spreadsheets of stock lots, vendors, customers, purchases, invoices, projects, costs and tools.\r\nreports/            every report over all dates.\r\ndocuments/          photos and scans, in folders named after the invoice or purchase reference.\r\n\r\nTo restore: open the app on the new server or phone, go to More, tap Import zip or JSON and choose this zip.\r\n${missing?`\r\nNote: ${missing} document(s) were not on this device and are not included.\r\n`:''}`);
+  add('README.txt',`Build Ledger export, ${today()}\r\n\r\napp/index.html      the app. Put it in any web folder (for Home Assistant: /config/www/artcost/) and open it.\r\ndata/backup.json    all data. Used when importing.\r\ncsv/                spreadsheets of stock lots, vendors, customers, purchases, invoices, projects, costs and tools.\r\nreports/            every report over all dates.\r\n${includeDocs&&db.docs.length?'documents/          photos and scans, in folders named after the invoice or purchase reference.\r\n':'documents/          not included in this export.\r\n'}\r\nTo restore: open the app on the new server or phone, go to More, tap Import zip or JSON and choose this zip.\r\n${missing?`\r\nNote: ${missing} document(s) were not on this device and are not included.\r\n`:''}`);
   return{blob:makeZip(F),missing}}
 async function impZip(f){
   try{const z=await readZip(f instanceof ArrayBuffer?f:await f.arrayBuffer()),b=z['data/backup.json'];if(!b)throw new Error('no data');const d=JSON.parse(new TextDecoder().decode(b));if(!d.projects||!d.items)throw new Error('bad');
@@ -529,7 +568,7 @@ function render(){
       ||'<p class="mu">No projects yet. Create one to start tracking its build cost.</p>');
   else if(S.v=='proj')projView(a);
   else if(S.v=='stock'){const low=db.items.filter(i=>i.min>0&&iq(i)<i.min);
-  a.innerHTML=`<div class="row"><h1>Stock</h1><button onclick="itemForm()">New item</button></div>`+
+  a.innerHTML=`<div class="row"><h1>Stock</h1><button onclick="itemForm()">New item</button><button class="g" onclick="mergeItems()">Merge items</button></div>`+
     (low.length?`<div class="card" style="border-color:var(--wn)"><div class="mu" style="color:var(--wn)">⚠ Low stock: ${low.map(i=>esc(i.name)+' ('+r4(iq(i))+' '+esc(i.unit)+', min '+r4(i.min)+')').join(', ')}</div></div>`:'')+
     (db.items.map(i=>{const tq=i.lots.reduce((a,l)=>a+l.qty,0),pc=Math.max(0,Math.min(100,iq(i)/(tq||1)*100)),ls=i.lots.filter(l=>l.rem>0);
       return `<div class="card tap${i.min>0&&iq(i)<i.min?' low':'':''}" onclick="itemSheet('${i.id}')"><div class="row"><b>${esc(i.name)}${i.min>0&&iq(i)<i.min?' <span style="color:var(--wn)">⚠ low</span>':''}</b><span>${r4(iq(i))} ${esc(i.unit)}</span></div>
@@ -557,7 +596,7 @@ function render(){
     <div class="btns"><button onclick="${AUTH?.totp?.on?'twofaOff()':'twofaOn()'}">${AUTH?.totp?.on?'Turn off two-factor':'Turn on two-factor'}</button><button class="g" onclick="pwForm()">Change password</button><button class="g" onclick="recoveryNew()">New recovery key</button><button class="g" onclick="lock()">Lock now</button></div>
     <label for="al">Lock automatically after</label><select id="al" onchange="AUTH.auto=+this.value;save();toast('Saved')">${[1,5,15,30].map(x=>`<option value="${x}" ${x==(AUTH?.auto||5)?'selected':''}>${x} minute${x>1?'s':''} idle</option>`).join('')}</select></div>
     <div class="card"><p class="mu">Data, documents and photos are stored encrypted in this phone's browser, never on your server. The encrypted export includes everything plus the app code, so you can import it on another server or device.</p>
-    <div class="btns"><button onclick="exportEnc()">Export everything (encrypted)</button><button class="g" onclick="exportPlain()">Plain zip (not encrypted)</button><button class="g" onclick="$('#imp').click()">Import backup</button></div>
+    <div class="btns"><button onclick="exportEnc()">Export everything (encrypted)</button><button class="g" onclick="exportPlain()">Plain zip (not encrypted)</button><button class="g" onclick="$('#imp').click()">Import backup</button><button class="d" onclick="uninstall()">Uninstall — wipe all data</button></div>
     <input id="imp" type="file" accept=".zip,.json,application/zip,application/json" hidden onchange="imp(this.files[0])"></div>`;
 }
 function projView(a){
@@ -574,14 +613,41 @@ function projView(a){
   <div class="card"><div class="mu">Total build cost</div><div class="big">${m(cost)}</div>
   <div class="mu">With ${p.margin}% margin: <b>${m(price)}</b> (profit ${m(price-cost)})</div>
   <div class="mu">${Object.entries(bycat).map(([k,v])=>`${esc(k)} ${m(v)}`).join(' · ')}</div></div>
-  <div class="btns"><button onclick="useForm('${p.id}')">Use stock</button><button onclick="useToolForm('${p.id}')">Use tool</button><button onclick="costForm('${p.id}')">Add cost</button><button class="g" onclick="billForm(P('${p.id}'))">Invoice</button></div>
+  <div class="btns"><button onclick="useForm('${p.id}')">Use stock</button><button onclick="useToolForm('${p.id}')">Use tool</button><button onclick="costForm('${p.id}')">Add cost</button><button class="g" onclick="billForm(P('${p.id}'))">Invoice</button><button class="g" onclick="pdfProject('${p.id}')">Export PDF</button></div>
   <h2>Costs</h2>${rows.map(r=>`<div class="card"><div class="row"><b>${esc(r.t)}</b><b>${m(r.a)}</b></div><div class="row"><span class="mu">${esc(r.s)} · ${esc(r.d)}</span><button class="d" style="min-height:36px;padding:4px 10px" onclick="delEntry('${r.k}','${r.id}')">Delete</button></div></div>`).join('')||'<p class="mu">No costs yet. Use stock or add a cost above.</p>'}
   ${db.bills.filter(b=>b.pid==p.id).length?`<h2>Invoices</h2>`+db.bills.filter(b=>b.pid==p.id).map(b=>`<div class="card tap" onclick="showBill('${b.id}')"><div class="row"><b>${esc(b.no)}</b><b>${m(b.price)}</b></div><div class="mu">${esc(b.date)} · ${st(b)} · cost was ${m(b.cost)}</div></div>`).join(''):''}
   ${docsHTML('proj',p.id,p.name)}<div class="btns" style="margin-top:28px"><button class="d" onclick="delProject('${p.id}')">Delete project</button></div>`;docsRefresh('proj',p.id);
 }
+async function pdfProject(id){
+  const p=P(id);if(!p)return;
+  await loadPdf();
+  const cost=pCost(id),price=cost*(1+p.margin/100);
+  const rows=[...db.uses.filter(u=>u.pid==id).map(u=>({d:u.date,t:`${I(u.iid)?.name||'Item'} × ${r4(u.qty)} ${I(u.iid)?.unit||''}`,s:'From stock',a:u.cost})),
+    ...db.costs.filter(c=>c.pid==id).map(c=>({d:c.date,t:c.desc,s:`${c.cat} · ${r4(c.qty)} × ${m(c.rate)}`,a:c.amt}))].sort((x,y)=>y.d.localeCompare(x.d));
+  const body=[['Date','Description','Source','Amount']].concat(rows.map(r=>[r.d,r.t,r.s,m(r.a)]));
+  body.push(['','','Total',m(cost)]);
+  body.push(['','','With margin',m(price)]);
+  body.push(['','','Profit',m(price-cost)]);
+  const dd={content:[
+    {text:`Cost Breakdown — ${esc(p.name)}`,style:'h1',margin:[0,0,0,10]},
+    {text:`Project: ${esc(p.name)}  ·  Status: ${esc(p.status)}  ·  Ref: ${esc(p.ref||'')}\nTotal cost: ${m(cost)}  ·  ${p.margin}% margin price: ${m(price)}  ·  Profit: ${m(price-cost)}\nGenerated: ${today()}`,style:'sub',margin:[0,0,0,14]},
+    {text:'Costs',style:'h2',margin:[0,10,0,4]},
+    {table:{widths:['*','*','right','right'],body},layout:'lightHorizontalLines'},
+    {text:`\nTotal build cost: ${m(cost)}`,style:'total',margin:[0,10,0,0]}
+  ],styles:{h1:{fontSize:18,bold:true},sub:{fontSize:10,color:'#555'},h2:{fontSize:14,bold:true},total:{fontSize:12,bold:true,alignment:'right'}}};
+  window.pdfMake.createPdf(dd).download(`build-ledger-cost-${esc(p.name).replace(/\W/g,'_')}-${today()}.pdf`)
+}
 function saveSet(){db.set={biz:$('#s1').value.trim(),prefix:($('#s2').value.trim()||'ART').replace(/[^A-Za-z0-9]/g,''),cur:$('#s3').value.trim()||'$',info:$('#s4').value.trim(),gst:parseFloat($('#s5').value)||0,syncLocal:$('#ssync').checked};save();toast('Settings saved')}
 function logoPick(){const inp=document.createElement('input');inp.type='file';inp.accept='image/*';inp.onchange=async()=>{const f=inp.files[0];if(!f)return;if(f.size>250000){toast('Logo too large (max 250 KB)');return}const b=await shrink(f);const url=URL.createObjectURL(b);sheet('Company logo',[{k:'data',l:'',opts:[[url,'Preview']]}],v=>{db.set.logo=url;save();render();return true},'Use this logo',`<img src="${url}" style="max-width:100%;border-radius:8px;margin-top:8px"><div class="mu">The logo is stored encrypted with your data and appears on invoices.</div>`});inp.click()};
 function logoClear(){if(!db.set.logo){toast('No logo to clear');return}db.set.logo='';save();render();toast('Logo cleared')}
+async function uninstall(){
+  if(!confirm('Uninstall will ERASE everything: all projects, stock, invoices, documents, photos, and your encryption keys. This cannot be undone. Export a backup first if you want to keep your data. Continue?'))return;
+  if(!confirm('Type ERASE to confirm permanent deletion of all Build Ledger data from this device.'))return;
+  const confirm2=prompt('Type ERASE to confirm:');if(confirm2!='ERASE'){toast('Uninstall cancelled');return}
+  try{const d=await idb();const txn=d.transaction('blobs','readwrite');const store=txn.objectStore('blobs');await new Promise((res,rej)=>{store.clear();txn.oncomplete=res;txn.onerror=rej})}catch(e){}
+  localStorage.removeItem(VK);localStorage.removeItem(FK);localStorage.removeItem(K);
+  KEY=null;META=null;AUTH=null;db=fresh();norm();save();
+  toast('All Build Ledger data has been wiped from this device');setTimeout(()=>location.reload(),1000)}
 function exp(){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(db,null,1)],{type:'application/json'}));a.download=`build-ledger-${today()}.json`;a.click()}
 async function imp(f){if(!f)return;const buf=await f.arrayBuffer(),u=new Uint8Array(buf);
   if(u.length>36&&TD.decode(u.slice(0,4))=='BLX1'){
@@ -598,12 +664,20 @@ async function encryptBytes(pw,u8){const salt=rnd(16),key=await deriveKey(pw,sal
   o.set(TE.encode('BLX1'));o.set(salt,4);new DataView(o.buffer).setUint32(20,ITER);o.set(iv,24);o.set(ct,36);return o}
 async function decryptBytes(pw,u8){const iter=new DataView(u8.buffer,u8.byteOffset).getUint32(20);if(iter<1e5||iter>5e6)throw new Error('bad');
   return unaes(await deriveKey(pw,u8.slice(4,20),iter),u8.slice(24,36),u8.slice(36),'BLX1')}
-function exportEnc(){sheet('Encrypted export',[{k:'p1',l:'Export password (at least 10 characters)',t:'password',req:1},{k:'p2',l:'Confirm export password',t:'password',req:1}],
-  v=>{if(v.p1!==v.p2||!pwOk(v.p1)){toast(v.p1!==v.p2?'Passwords do not match':'Use at least 10 characters');return false}
-    (async()=>{const{blob,missing}=await buildZip();toast('Encrypting…');download(new Blob([await encryptBytes(v.p1,new Uint8Array(await blob.arrayBuffer()))],{type:'application/octet-stream'}),`build-ledger-export-${today()}.blx`);toast(missing?`Exported. ${missing} document(s) were missing`:'Encrypted export ready')})();return true},
-  'Export','Everything, including the app code and documents, is encrypted with this password (AES-256-GCM). You need it to import. It can differ from your login password.')}
-function exportPlain(){if(!confirm('This zip is NOT encrypted. Anyone with the file can read your business data. Continue?'))return;
-  buildZip().then(({blob,missing})=>{download(blob,`build-ledger-export-${today()}.zip`);toast(missing?`Exported. ${missing} document(s) were missing`:'Export ready')})}
+function exportEnc(){
+  const hasDocs=db.docs&&db.docs.length>0;
+  sheet('Encrypted export',[{k:'p1',l:'Export password (at least 10 characters)',t:'password',req:1},{k:'p2',l:'Confirm export password',t:'password',req:1},...(hasDocs?[{k:'docs',l:'Include photos and documents in export',v:'1',opts:[['1','Yes'],'0','No']]}:[])],
+    v=>{if(v.p1!==v.p2||!pwOk(v.p1)){toast(v.p1!==v.p2?'Passwords do not match':'Use at least 10 characters');return false}
+      const includeDocs=!hasDocs||v.docs!=='0';
+      (async()=>{const{blob,missing}=await buildZip(includeDocs);toast('Encrypting…');download(new Blob([await encryptBytes(v.p1,new Uint8Array(await blob.arrayBuffer()))],{type:'application/octet-stream'}),`build-ledger-export-${today()}.blx`);toast(missing?`Exported. ${missing} document(s) were missing`:'Encrypted export ready')})();return true},
+    'Export','Everything, including the app code and documents, is encrypted with this password (AES-256-GCM). You need it to import. It can differ from your login password.')}
+function exportPlain(){
+  const hasDocs=db.docs&&db.docs.length>0;
+  const fields=hasDocs?[{k:'docs',l:'Include photos and documents',v:'1',opts:[['1','Yes'],'0','No']}]:[];
+  sheet('Plain export (NOT encrypted)',fields,
+    v=>{const includeDocs=!hasDocs||v.docs!=='0';
+      buildZip(includeDocs).then(({blob,missing})=>{download(blob,`build-ledger-export-${today()}.zip`);toast(missing?`Exported. ${missing} document(s) were missing`:'Export ready')})},
+    'Export','WARNING: This zip is NOT encrypted. Anyone with the file can read your business data.')}
 
 /* ---------- password, two-factor, lock ---------- */
 const pwOk=p=>p.length>=10&&!/^(.)\1+$/.test(p)&&!/^(password|1234567890|qwertyuiop)/i.test(p);

@@ -59,6 +59,12 @@ Files are encrypted (`.enc`, 12-byte IV prefix) unless the user chooses readable
 - Keep the app a single file unless there is a strong reason; keep all user-facing text plain and friendly.
 - Currency, GST and date formats are Australian by default (dd/mm/yyyy parsing in scan, ABN, 10% GST default).
 
+## Phase 2 features (implemented)
+- PDF export: `pdfProject(id)` generates a cost breakdown PDF for a project (lazy-loads pdfmake from CDN). Button on project view.
+- Merge existing inventory materials: `mergeItems()` lets the user pick two stock items, merges lots, averages unit cost by remaining quantity, and re-points all uses/purchase lines to the kept item. Button on Stock tab.
+- Enhanced export with include/exclude documents: `exportEnc()` and `exportPlain()` offer a toggle to include or exclude photos/documents from the zip export. `buildZip(includeDocs)` accepts a boolean.
+- Clean uninstall: `uninstall()` wipes localStorage vault, IndexedDB blobs, and all app data (triple-confirmed with "ERASE"). Button on More page.
+
 ## Known limits
 - 2FA is enforced in the app, not by the server. PBKDF2 is used because Argon2 is not built into browsers.
 - If the server is unreachable, changes are retried every 15 seconds but are lost if the page is closed first.
