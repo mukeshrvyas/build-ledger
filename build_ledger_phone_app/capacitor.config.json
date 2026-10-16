@@ -1,0 +1,9 @@
+{
+  "appId": "com.buildledger.app",
+  "appName": "Build Ledger",
+  "webDir": "www",
+  "server": {
+    "url": "https://YOUR-SERVER-ADDRESS/",
+    "cleartext": false
+  }
+}

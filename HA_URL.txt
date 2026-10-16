@@ -1,0 +1,3 @@
+H3C2-7KXT-CKIW-AR56-HQLS-RLGA-TRBD-LOYO
+http://homeassistant.local:8443
+https://ha.boonderooave.online

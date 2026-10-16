@@ -1,0 +1,6 @@
+{
+  "name": "build-ledger-phone-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Phone app wrapper for Build Ledger. Lets documents be saved as real files in phone storage."
+}
