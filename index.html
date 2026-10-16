@@ -16,7 +16,7 @@ h1,h2{font-family:Georgia,"Times New Roman",serif;font-weight:700;margin:0}
 h1{font-size:26px}h2{font-size:19px;margin:22px 0 8px}
 .mu{color:var(--mu);font-size:14px}.row{display:flex;gap:8px;align-items:center;justify-content:space-between}
 .card{background:var(--sf);border:1px solid var(--ln);border-radius:10px;padding:12px 14px;margin:8px 0}
-.tap{cursor:pointer}
+.tap{cursor:pointer}.low{border-color:var(--wn)!important}
 .big{font:700 40px/1.1 Georgia,serif}
 .chip{display:inline-block;border:1px solid var(--ln);border-radius:99px;padding:1px 10px;font-size:13px;margin:2px 4px 2px 0;color:var(--mu)}
 button{font:inherit;border-radius:8px;border:1px solid var(--ac);background:var(--ac);color:var(--acx);padding:10px 14px;min-height:44px}
@@ -43,9 +43,10 @@ input,select,textarea{width:100%;font:inherit;padding:10px;border:1px solid var(
 <div id="toast" role="status"></div>
 <script>
 const K='buildledger.v1';
-const fresh=()=>({projects:[],items:[],uses:[],costs:[],bills:[],set:{prefix:'ART',cur:'$',biz:''}});
+const fresh=()=>({projects:[],items:[],uses:[],costs:[],bills:[],set:{prefix:'ART',cur:'$',biz:'',logo:'',syncLocal:true}});
 let db=fresh();
-function norm(){for(const k of['tools','vendors','customers','purchases','docs'])db[k]=db[k]||[];db.set=db.set||{};
+function norm(){for(const k of['tools','vendors','customers','purchases','docs'])db[k]=db[k]||[];db.set=db.set||{};db.set.syncLocal=db.set.syncLocal!==false;
+  db.items.forEach(i=>i.min=i.min??0);
   if(db.items.some(i=>!i.lots)){db.items.forEach(i=>{if(i.lots)return;const l={id:uid(),date:'',qty:Math.max(i.bought||0,i.qty||0),rem:i.qty||0,uc:i.unit_cost||0};i.lots=[l];
     db.uses.filter(u=>u.iid==i.id&&!u.al).forEach(u=>u.al=[{lid:l.id,qty:u.qty,cost:u.cost}]);delete i.qty;delete i.unit_cost;delete i.bought});save()}}
 const VK='buildledger.vault',FK='buildledger.fails',ITER=600000,TE=new TextEncoder(),TD=new TextDecoder();
@@ -143,16 +144,22 @@ function costForm(pid){
 }
 function itemForm(){
   sheet('New stock item',[{k:'name',l:'Name',req:1,ph:'Wood screws 4x40'},{k:'unit',l:'Unit',req:1,ph:'pcs, ml, g, m, sheet'},
+    {k:'min',l:'Low stock alert when on hand drops below',t:'number',v:0,ph:'0 = off'},
     {k:'qty',l:'Quantity purchased',t:'number',req:1},{k:'price',l:'Total price paid',t:'number',req:1}],
-    v=>{if(!(v.qty>0))return false;let i=findItem(v.name,v.unit);if(!i){i={id:uid(),name:v.name,unit:v.unit,lots:[]};db.items.push(i)}
+    v=>{if(!(v.qty>0))return false;let i=findItem(v.name,v.unit);
+      if(i){sheet('Item already exists',[{k:'act',l:'',opts:[['merge','Add as a new lot to the existing item'],['sep','Keep as a separate item']]}],
+        w=>{if(w.act=='merge'){i.min=v.min??0;i.lots.push({id:uid(),date:today(),qty:v.qty,rem:v.qty,uc:v.price/v.qty});save();render();return true}
+          if(w.act=='sep'){i={id:uid(),name:v.name,unit:v.unit,lots:[],min:v.min??0};db.items.push(i);i.lots.push({id:uid(),date:today(),qty:v.qty,rem:v.qty,uc:v.price/v.qty});save();render();return true}
+          return false},'Continue','A stock item with this name and unit already exists. Merge adds stock to it (each lot keeps its own unit cost). Separate creates a new item.');return}
+      i={id:uid(),name:v.name,unit:v.unit,lots:[],min:v.min??0};db.items.push(i);
       i.lots.push({id:uid(),date:today(),qty:v.qty,rem:v.qty,uc:v.price/v.qty});save();render()},
     'Save','If you already hold this item, this is stored as a separate lot with its own unit cost.');
 }
 function itemSheet(id){
   const i=I(id),ls=i.lots.filter(l=>l.rem>0);
-  sheet(i.name,[{k:'qty',l:`New lot quantity (${i.unit})`,t:'number'},{k:'price',l:'Total price paid',t:'number'}],
-    v=>{if(!(v.qty>0)||!(v.price>=0))return false;i.lots.push({id:uid(),date:today(),qty:v.qty,rem:v.qty,uc:v.price/v.qty});save();render()},
-    'Add as new lot',`${r4(iq(i))} ${esc(i.unit)} on hand, worth ${m(ival(i))}.<br>`+(ls.map(l=>`${esc(l.date||'Earlier')}: ${r4(l.rem)} of ${r4(l.qty)} ${esc(i.unit)} @ ${m(l.uc)}${l.inv?' · inv '+esc(l.inv):''}`).join('<br>')||'No stock left.'));
+  sheet(i.name,[{k:'qty',l:`New lot quantity (${i.unit})`,t:'number'},{k:'price',l:'Total price paid',t:'number'},{k:'min',l:'Low stock alert when on hand drops below',t:'number',v:i.min??0,ph:'0 = off'}],
+    v=>{if(!(v.qty>0)||!(v.price>=0))return false;i.min=v.min??0;i.lots.push({id:uid(),date:today(),qty:v.qty,rem:v.qty,uc:v.price/v.qty});save();render()},
+    'Add as new lot',`${r4(iq(i))} ${esc(i.unit)} on hand, worth ${m(ival(i))}.${i.min>0?' Low stock if below '+r4(i.min)+' '+esc(i.unit):''}<br>`+(ls.map(l=>`${esc(l.date||'Earlier')}: ${r4(l.rem)} of ${r4(l.qty)} ${esc(i.unit)} @ ${m(l.uc)}${l.inv?' · inv '+esc(l.inv):''}`).join('<br>')||'No stock left.'));
   i.lots.filter(l=>!l.pl&&l.rem>=l.qty-1e-9).forEach(l=>{const b=document.createElement('button');b.className='g';b.style.cssText='width:100%;margin-top:8px';
     b.textContent=`Remove unused lot (${r4(l.qty)} @ ${m(l.uc)})`;b.onclick=()=>{i.lots=i.lots.filter(x=>x.id!=l.id);save();close();render()};$('#sbody').append(b)});
   const b=document.createElement('button');b.className='d';b.textContent='Delete item';b.style.cssText='width:100%;margin-top:8px';
@@ -268,7 +275,7 @@ function billForm(p,b){
 function togglePaid(id){const b=db.bills.find(x=>x.id==id);b.status=st(b)=='Paid'?'Unpaid':'Paid';save();render();showBill(id)}
 function showBill(id){
   const b=db.bills.find(x=>x.id==id),p=P(b.pid),c=C(b.cid),paid=st(b)=='Paid',g=b.gst>0;
-  $('#sbody').innerHTML=`<div class="rc"><div class="row"><h2 style="margin-top:0">${esc(db.set.biz||'Invoice')}</h2><b>${paid?'Receipt':'Invoice'}</b></div>
+  $('#sbody').innerHTML=`<div class="rc"><div class="row">${db.set.logo?`<img src="${esc(db.set.logo)}" style="height:44px;border-radius:8px;margin-right:12px">`:''}<h2 style="margin-top:0">${esc(db.set.biz||'Invoice')}</h2><b>${paid?'Receipt':'Invoice'}</b></div>
   ${db.set.info?`<div class="mu" style="white-space:pre-line">${esc(db.set.info)}</div>`:''}
   <p class="mu">No. <b>${esc(b.no)}</b><br>Date ${esc(b.date)}<br>Status ${esc(st(b))}</p>
   ${(c||b.customer)?`<p><b>Bill to</b><br>${esc(c?.name||b.customer)}${c?.address?`<br><span style="white-space:pre-line">${esc(c.address)}</span>`:''}${c&&(c.city||c.state||c.postcode)?`<br>${esc([c.city,c.state,c.postcode].filter(Boolean).join(' '))}`:''}${c?.email?`<br>${esc(c.email)}`:''}${c?.mobile||c?.phone?`<br>${esc(c.mobile||c.phone)}`:''}</p>`:''}
@@ -302,9 +309,16 @@ function purchForm(vid){
 function lineForm(pid){
   const pu=PU(pid);
   sheet('Add material',[{k:'iid',l:'Stock item',v:'',opts:[['','+ New stock item'],...db.items.map(i=>[i.id,`${i.name} (${i.unit})`])]},
-    {k:'name',l:'New item name (only if new)'},{k:'unit',l:'New item unit (pcs, ml, g)'},{k:'qty',l:'Quantity purchased',t:'number',req:1},{k:'price',l:'Line price as shown on the vendor invoice',t:'number',req:1}],
+    {k:'name',l:'New item name (only if new)'},{k:'unit',l:'New item unit (pcs, ml, g)'},{k:'min',l:'Low stock alert when on hand drops below',t:'number',v:0,ph:'0 = off'},
+    {k:'qty',l:'Quantity purchased',t:'number',req:1},{k:'price',l:'Line price as shown on the vendor invoice',t:'number',req:1}],
     v=>{if(!(v.qty>0)||!(v.price>=0))return false;let i=v.iid&&I(v.iid);
-      if(!i){if(!v.name||!v.unit){toast('Enter a name and unit for the new item');return false}i=findItem(v.name,v.unit);if(!i){i={id:uid(),name:v.name,unit:v.unit,lots:[]};db.items.push(i)}}
+      if(!i){if(!v.name||!v.unit){toast('Enter a name and unit for the new item');return false}
+        const dup=findItem(v.name,v.unit);
+        if(dup){sheet('Item already exists',[{k:'act',l:'',opts:[['merge','Add to existing item'],['sep','Keep as separate item']]}],
+          w=>{const ii=w.act=='merge'?dup:(w.act=='sep'?(db.items.push(i={id:uid(),name:v.name,unit:v.unit,lots:[],min:v.min??0}),i):null);if(!ii)return false;const x=gstCalc(v.price,pu.gstRate,pu.gstMode||'none'),lid=uid(),ln=uid();
+            ii.lots.push({id:lid,date:pu.date,qty:v.qty,rem:v.qty,uc:x.net/v.qty,vid:pu.vid,inv:pu.inv,pl:ln});
+            pu.lines.push({id:ln,iid:ii.id,lid,desc:ii.name,unit:ii.unit,qty:v.qty,price:v.price,net:x.net,gst:x.gst,total:x.total});save();render();return true},'Continue','A stock item with this name and unit already exists.');return false}
+        i={id:uid(),name:v.name,unit:v.unit,lots:[],min:v.min??0};db.items.push(i)}
       const x=gstCalc(v.price,pu.gstRate,pu.gstMode||'none'),lid=uid(),ln=uid();
       i.lots.push({id:lid,date:pu.date,qty:v.qty,rem:v.qty,uc:x.net/v.qty,vid:pu.vid,inv:pu.inv,pl:ln});
       pu.lines.push({id:ln,iid:i.id,lid,desc:i.name,unit:i.unit,qty:v.qty,price:v.price,net:x.net,gst:x.gst,total:x.total});save();render()},
@@ -514,9 +528,11 @@ function render(){
       <div class="mu">${esc(p.status)}${p.ref?' · '+esc(p.ref):''}</div>${(p.tags||'').split(',').filter(t=>t.trim()).map(t=>`<span class="chip">${esc(t.trim())}</span>`).join('')}</div>`).join('')
       ||'<p class="mu">No projects yet. Create one to start tracking its build cost.</p>');
   else if(S.v=='proj')projView(a);
-  else if(S.v=='stock')a.innerHTML=`<div class="row"><h1>Stock</h1><button onclick="itemForm()">New item</button></div>`+
+  else if(S.v=='stock'){const low=db.items.filter(i=>i.min>0&&iq(i)<i.min);
+  a.innerHTML=`<div class="row"><h1>Stock</h1><button onclick="itemForm()">New item</button></div>`+
+    (low.length?`<div class="card" style="border-color:var(--wn)"><div class="mu" style="color:var(--wn)">⚠ Low stock: ${low.map(i=>esc(i.name)+' ('+r4(iq(i))+' '+esc(i.unit)+', min '+r4(i.min)+')').join(', ')}</div></div>`:'')+
     (db.items.map(i=>{const tq=i.lots.reduce((a,l)=>a+l.qty,0),pc=Math.max(0,Math.min(100,iq(i)/(tq||1)*100)),ls=i.lots.filter(l=>l.rem>0);
-      return `<div class="card tap" onclick="itemSheet('${i.id}')"><div class="row"><b>${esc(i.name)}</b><span>${r4(iq(i))} ${esc(i.unit)}</span></div>
+      return `<div class="card tap${i.min>0&&iq(i)<i.min?' low':'':''}" onclick="itemSheet('${i.id}')"><div class="row"><b>${esc(i.name)}${i.min>0&&iq(i)<i.min?' <span style="color:var(--wn)">⚠ low</span>':''}</b><span>${r4(iq(i))} ${esc(i.unit)}</span></div>
       ${ls.map(l=>`<div class="mu">${esc(l.date||'Earlier')} · ${r4(l.rem)} ${esc(i.unit)} @ ${m(l.uc)}</div>`).join('')||'<div class="mu">Out of stock</div>'}
       <div class="mu">Worth ${m(ival(i))}</div><div class="bar"><i style="width:${pc}%"></i></div></div>`}).join('')
       ||'<p class="mu">Add what you buy in bulk (screws, glue, finish). Usage on projects will deduct from here.</p>');
@@ -532,7 +548,9 @@ function render(){
     <label for="s2">Invoice number prefix</label><input id="s2" value="${esc(db.set.prefix)}" maxlength="6">
     <label for="s5">GST rate (%) used as the default on invoices</label><input id="s5" type="number" step="any" value="${db.set.gst??10}">
     <label for="s3">Currency symbol</label><input id="s3" value="${esc(db.set.cur)}" maxlength="3">
-    <div class="btns"><button onclick="saveSet()">Save settings</button></div></div>
+    <label for="slogo">Company logo on invoices (PNG/JPG, max ~200 KB)</label><input id="slogo" type="file" accept="image/*"><div class="mu">${db.set.logo?'Logo set ('+Math.round(db.set.logo.length/1024)+' KB)':'No logo yet'}</div>
+    <label><input type="checkbox" id="ssync"${db.set.syncLocal!==false?' checked':''}> Sync company details between server and mobile (uncheck to keep local only)</label>
+    <div class="btns"><button onclick="saveSet()">Save settings</button><button class="g" onclick="logoPick()">Change logo</button><button class="g" onclick="logoClear()">Clear logo</button></div></div>
     <div class="card"><b>Security</b><div class="mu">Everything on this device is encrypted with AES-256-GCM. Your password (PBKDF2-SHA-256, 600,000 rounds) unlocks a random data key, and your recovery key can unlock it too if you forget the password.</div>
     <div class="row" style="margin-top:8px"><span>Two-factor authentication</span><b>${AUTH?.totp?.on?'On':'Off'}</b></div>
     <div class="row"><span>Recovery key</span><b>${META?.rs?'Set up':'Not set'}</b></div>
@@ -561,7 +579,9 @@ function projView(a){
   ${db.bills.filter(b=>b.pid==p.id).length?`<h2>Invoices</h2>`+db.bills.filter(b=>b.pid==p.id).map(b=>`<div class="card tap" onclick="showBill('${b.id}')"><div class="row"><b>${esc(b.no)}</b><b>${m(b.price)}</b></div><div class="mu">${esc(b.date)} · ${st(b)} · cost was ${m(b.cost)}</div></div>`).join(''):''}
   ${docsHTML('proj',p.id,p.name)}<div class="btns" style="margin-top:28px"><button class="d" onclick="delProject('${p.id}')">Delete project</button></div>`;docsRefresh('proj',p.id);
 }
-function saveSet(){db.set={biz:$('#s1').value.trim(),prefix:($('#s2').value.trim()||'ART').replace(/[^A-Za-z0-9]/g,''),cur:$('#s3').value.trim()||'$',info:$('#s4').value.trim(),gst:parseFloat($('#s5').value)||0};save();toast('Settings saved')}
+function saveSet(){db.set={biz:$('#s1').value.trim(),prefix:($('#s2').value.trim()||'ART').replace(/[^A-Za-z0-9]/g,''),cur:$('#s3').value.trim()||'$',info:$('#s4').value.trim(),gst:parseFloat($('#s5').value)||0,syncLocal:$('#ssync').checked};save();toast('Settings saved')}
+function logoPick(){const inp=document.createElement('input');inp.type='file';inp.accept='image/*';inp.onchange=async()=>{const f=inp.files[0];if(!f)return;if(f.size>250000){toast('Logo too large (max 250 KB)');return}const b=await shrink(f);const url=URL.createObjectURL(b);sheet('Company logo',[{k:'data',l:'',opts:[[url,'Preview']]}],v=>{db.set.logo=url;save();render();return true},'Use this logo',`<img src="${url}" style="max-width:100%;border-radius:8px;margin-top:8px"><div class="mu">The logo is stored encrypted with your data and appears on invoices.</div>`});inp.click()};
+function logoClear(){if(!db.set.logo){toast('No logo to clear');return}db.set.logo='';save();render();toast('Logo cleared')}
 function exp(){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(db,null,1)],{type:'application/json'}));a.download=`build-ledger-${today()}.json`;a.click()}
 async function imp(f){if(!f)return;const buf=await f.arrayBuffer(),u=new Uint8Array(buf);
   if(u.length>36&&TD.decode(u.slice(0,4))=='BLX1'){
