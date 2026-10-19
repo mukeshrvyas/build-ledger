@@ -53,6 +53,7 @@ function norm(){for(const k of['tools','vendors','customers','purchases','docs']
 const VK='buildledger.vault',FK='buildledger.fails',ITER=600000,TE=new TextEncoder(),TD=new TextDecoder();
 let KEY=null,META=null,AUTH=null,_t,_busy=Promise.resolve(),_last=Date.now();
 let SYNC_URL=null,SYNC_ONLINE=false,SYNC_QUEUE=[],SYNC_BUSY=false,SYNC_LAST=0;
+let SQL_DB=null,SQL_READY=false;
 const b64=u=>{let s='';for(let i=0;i<u.length;i+=32768)s+=String.fromCharCode(...u.subarray(i,i+32768));return btoa(s)};
 const unb64=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
 const rnd=n=>crypto.getRandomValues(new Uint8Array(n));
@@ -70,7 +71,7 @@ const unaes=(key,iv,ct,aad)=>crypto.subtle.decrypt({name:'AES-GCM',iv,additional
 const sha=async x=>[...new Uint8Array(await crypto.subtle.digest('SHA-256',TE.encode(x)))].map(b=>b.toString(16).padStart(2,'0')).join('');
 const save=()=>{if(KEY){db._syncTs=Date.now();clearTimeout(_t);_t=setTimeout(flush,60)}};
 function flush(){clearTimeout(_t);if(!KEY||!AUTH)return _busy;const k=KEY,m=META,snap=TE.encode(JSON.stringify({db,auth:AUTH}));
-  _busy=_busy.then(async()=>{try{const{iv,ct}=await aes(k,snap,'vault');const vault={v:3,salt:b64(m.salt),iter:m.iter,pw:{iv:b64(m.pw.iv),wk:b64(m.pw.wk)},rs:m.rs&&{salt:b64(m.rs.salt),iter:m.rs.iter,iv:b64(m.rs.iv),wk:b64(m.rs.wk)},iv:b64(iv),ct:b64(ct)};localStorage.setItem(VK,JSON.stringify(vault))}catch(e){toast('Could not save: storage is full or blocked')}}
+  _busy=_busy.then(async()=>{try{const{iv,ct}=await aes(k,snap,'vault');const vault={v:3,salt:b64(m.salt),iter:m.iter,pw:{iv:b64(m.pw.iv),wk:b64(m.pw.wk)},rs:m.rs&&{salt:b64(m.rs.salt),iter:m.rs.iter,iv:b64(m.rs.iv),wk:b64(m.rs.wk)},iv:b64(iv),ct:b64(ct)};const vaultJson=JSON.stringify(vault);await sqlSaveVault(vaultJson);localStorage.setItem(VK,vaultJson)}catch(e){toast('Could not save: storage is full or blocked')}}
     .then(async()=>{if(SYNC_ONLINE&&SYNC_URL&&!db.set.syncLocal){try{await syncPush()}catch(e){}}});return _busy}
 
 const $=s=>document.querySelector(s),uid=()=>Math.random().toString(36).slice(2,10);
@@ -456,6 +457,36 @@ async function ensureSqlDb(){
   if(!_sqlDb){_sqlDb=await new Promise(res=>sql(res))}
   return _sqlDb
 }
+async function initSqlStorage(){
+  if(SQL_READY)return;
+  const db=await ensureSqlDb();
+  db.run(`CREATE TABLE IF NOT EXISTS vault (key TEXT PRIMARY KEY, value TEXT, updated_at REAL)`);
+  db.run(`CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT)`);
+  SQL_DB=db;SQL_READY=true;
+  // Migrate from localStorage if exists
+  const lsVault=localStorage.getItem(VK);
+  if(lsVault){
+    try{await sqlSaveVault(lsVault);localStorage.removeItem(VK);}catch(e){}
+  }
+}
+async function sqlSaveVault(vaultJson){
+  if(!SQL_READY)await initSqlStorage();
+  SQL_DB.run(`INSERT OR REPLACE INTO vault (key, value, updated_at) VALUES ('main', ?, ?)`,[vaultJson,Date.now()]);
+}
+async function sqlLoadVault(){
+  if(!SQL_READY)await initSqlStorage();
+  const row=SQL_DB.prepare(`SELECT value FROM vault WHERE key='main'`).get();
+  return row?row.value:null;
+}
+async function sqlGet(k){
+  if(!SQL_READY)await initSqlStorage();
+  const row=SQL_DB.prepare(`SELECT value FROM kv WHERE key=?`).get([k]);
+  return row?row.value:null;
+}
+async function sqlSet(k,v){
+  if(!SQL_READY)await initSqlStorage();
+  SQL_DB.run(`INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)`,[k,v]);
+}
 
 /* ---------- sync queue (local-first, server second) ----------*/
 async function syncPush(){
@@ -741,6 +772,7 @@ async function uninstall(){
   }
   try{const d=await idb();const txn=d.transaction('blobs','readwrite');const store=txn.objectStore('blobs');await new Promise((res,rej)=>{store.clear();txn.oncomplete=res;txn.onerror=rej})}catch(e){}
   localStorage.removeItem(VK);localStorage.removeItem(FK);localStorage.removeItem(K);
+  if(SQL_READY){SQL_DB.run(`DELETE FROM vault`);SQL_DB.run(`DELETE FROM kv`)}
   KEY=null;META=null;AUTH=null;SYNC_URL=null;SYNC_ONLINE=false;SYNC_QUEUE=[];db=fresh();norm();save();
   toast('All Build Ledger data has been wiped from this device and server');setTimeout(()=>location.reload(),1000)}
 async function backupDrive(){
@@ -824,7 +856,7 @@ function showSetup(legacy){
       KEY=await newDek();const salt=rnd(16);META={salt,iter:ITER,pw:await wrapDek(await kek(a,salt,ITER),KEY),rs:null};
       AUTH={totp:null,rec:[],auto:5,user:u||null,authHash:sha(a),pw:a};db=d;norm();await flush();
       if(u){SYNC_URL='/';SYNC_ONLINE=true;enqueueSync({op:'register',ts:Date.now()})}
-      if(!localStorage.getItem(VK))throw new Error('save');await migrateBlobs();localStorage.removeItem(K);afterAuth()}
+      if(!await sqlLoadVault())throw new Error('save');await migrateBlobs();localStorage.removeItem(K);afterAuth()}
     catch(err){KEY=null;msg.textContent='Something went wrong. Please try again.'}}
 }
 function showLogin(){
@@ -834,7 +866,7 @@ function showLogin(){
   $('#fg').onclick=showForgot;
   $('#lf').onsubmit=async e=>{e.preventDefault();const msg=$('#lmsg'),w=wait();if(w){msg.textContent=`Too many attempts. Wait ${w} seconds.`;return}
     msg.textContent='Unlocking…';const pw=$('#p1').value;
-    try{const v=JSON.parse(localStorage.getItem(VK));let o;
+    try{const v=JSON.parse(await sqlLoadVault());let o;
       if(v.v==2){/* older vault: move to a random data key that a recovery key can also unlock */
         const old=await deriveKey(pw,unb64(v.salt),v.iter);o=JSON.parse(TD.decode(await unaes(old,unb64(v.iv),unb64(v.ct),'vault')));
         KEY=await newDek();const salt=rnd(16);META={salt,iter:ITER,pw:await wrapDek(await kek(pw,salt,ITER),KEY),rs:null};
@@ -861,7 +893,7 @@ function showReset(){
   $('#lf').onsubmit=async e=>{e.preventDefault();const msg=$('#lmsg'),w=wait();if(w){msg.textContent=`Too many attempts. Wait ${w} seconds.`;return}
     const np=$('#p1').value;if(np!==$('#p2').value){msg.textContent='Passwords do not match.';return}if(!pwOk(np)){msg.textContent='Use at least 10 characters and avoid common passwords.';return}
     msg.textContent='Checking recovery key…';
-    try{const v=JSON.parse(localStorage.getItem(VK));if(v.v!=3||!v.rs){msg.textContent='No recovery key was set up on this device. Use erase and restore from backup instead.';return}
+    try{const v=JSON.parse(await sqlLoadVault());if(v.v!=3||!v.rs){msg.textContent='No recovery key was set up on this device. Use erase and restore from backup instead.';return}
       const m=metaOf(v),dek=await unwrapDek(await kek(rkNorm($('#rk1').value),m.rs.salt,m.rs.iter),m.rs.iv,m.rs.wk);
       const o=JSON.parse(TD.decode(await unaes(dek,unb64(v.iv),unb64(v.ct),'vault')));
       KEY=dek;m.salt=rnd(16);m.iter=ITER;m.pw=await wrapDek(await kek(np,m.salt,ITER),dek);META=m;db=o.db;AUTH=o.auth||{auto:5};AUTH.totp=null;AUTH.rec=[];norm();
@@ -910,8 +942,9 @@ function show2fa(){
 async function lock(){await flush();clearTimeout(_t);KEY=null;META=null;AUTH=null;db=fresh();close();$('#app').innerHTML='';$('#nav').innerHTML='';showLogin()}
 function eraseAll(){if(!confirm('This permanently erases ALL data, documents and the password on this device. Only continue if you have an export to restore from.'))return;
   if(!confirm('Erase everything now?'))return;localStorage.removeItem(VK);localStorage.removeItem(FK);localStorage.removeItem(K);
+  if(SQL_READY){SQL_DB.run(`DELETE FROM vault`);SQL_DB.run(`DELETE FROM kv`)}
   try{indexedDB.deleteDatabase('buildledger-docs')}catch(e){}setTimeout(()=>location.reload(),300)}
-async function verifyPw(pw){try{const v=JSON.parse(localStorage.getItem(VK));await unwrapDek(await kek(pw,unb64(v.salt),v.iter),unb64(v.pw.iv),unb64(v.pw.wk));return true}catch(e){return false}}
+async function verifyPw(pw){try{const v=JSON.parse(await sqlLoadVault());await unwrapDek(await kek(pw,unb64(v.salt),v.iter),unb64(v.pw.iv),unb64(v.pw.wk));return true}catch(e){return false}}
 function pwForm(){sheet('Change password',[{k:'cur',l:'Current password',t:'password',req:1},{k:'n1',l:'New password (at least 10 characters)',t:'password',req:1},{k:'n2',l:'Confirm new password',t:'password',req:1}],
   v=>{if(v.n1!==v.n2){toast('New passwords do not match');return false}if(!pwOk(v.n1)){toast('Use at least 10 characters');return false}
     (async()=>{await flush();if(!await verifyPw(v.cur)){toast('Current password is wrong');return}
@@ -936,8 +969,8 @@ function twofaOff(){sheet('Turn off two-factor authentication',[{k:'code',l:'Cur
 setInterval(()=>{if(KEY&&AUTH&&Date.now()-_last>(AUTH.auto||5)*60000)lock()},10000);
 document.addEventListener('visibilitychange',()=>{if(document.hidden)flush();else if(KEY&&AUTH&&Date.now()-_last>(AUTH.auto||5)*60000)lock()});
 addEventListener('pagehide',()=>flush());
-function boot(){
+async function boot(){
   if(!window.crypto?.subtle){lockUI('<p>Encryption needs a secure connection. Open this page through your https address (for example your Nabu Casa or reverse-proxy URL), not plain http.</p>');return}
-  if(localStorage.getItem(VK))showLogin();else showSetup(localStorage.getItem(K))}
+  if(await sqlLoadVault()||localStorage.getItem(VK))showLogin();else showSetup(localStorage.getItem(K))}
 boot();
 </script></body></html>

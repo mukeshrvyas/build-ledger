@@ -37,7 +37,8 @@ It runs as a single HTML file, optionally with a small Python server that stores
 - State is one in-memory object `db`: `projects, items (each with lots), uses, costs, bills, tools, vendors, customers, purchases, docs (metadata only), set, company`.
   `norm()` fills defaults and migrates old data; call it after any load or import.
 - Persistence: `save()` (debounced) calls `flush()`, which encrypts `{db, auth: AUTH}` and writes a v3 vault:
-  localStorage (local mode) or `PUT api/vault` (server mode, with revision check).
+  SQLite (via sql.js, lazy-loaded from CDN) is the primary store; localStorage is kept as a migration/backup copy.
+  Server mode: `PUT api/vault` (with revision check).
 - Rendering: `render()` rebuilds the current view from `S = {v, id, sub}` using template strings. Navigate with `go(view, id, sub)`.
 - UI forms use `sheet(title, fields, onOk, label, extra)` (bottom sheet). The sheet closes first, then runs `onOk`; return `false` to keep it open.
 - Stock uses lots: each purchase creates its own lot with its own unit cost. Usage takes oldest lot first (`take`) and records `al`
