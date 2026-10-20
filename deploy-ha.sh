@@ -210,7 +210,19 @@ EOF
 fi
 
 # -------------------------------------------------------
-# 8. Display summary
+# 8. Create APK directory for mobile downloads
+# -------------------------------------------------------
+echo "--- Creating APK directory ---"
+APK_DIR="$WEB_DIR/apk"
+mkdir -p "$APK_DIR"
+chmod 755 "$APK_DIR"
+echo "  APK directory: $APK_DIR"
+echo "  Place your built APK at: $APK_DIR/build-ledger.apk"
+echo "  Mobile users can download it from: https://your-server:$SERVER_PORT/apk/build-ledger.apk"
+echo ""
+
+# -------------------------------------------------------
+# 9. Display summary
 # -------------------------------------------------------
 echo ""
 echo "=============================================="
@@ -222,6 +234,7 @@ echo "  Port:        $SERVER_PORT"
 echo "  Data dir:    $DATA_DIR"
 echo "  Docs dir:    $DOCS_DIR"
 echo "  Web dir:     $WEB_DIR"
+echo "  APK dir:     $APK_DIR"
 echo "  Invite code: ${INVITE_CODE:-"(none)"}"
 echo "  User cap:    $USER_CAP"
 echo ""
@@ -246,6 +259,10 @@ if [[ -n "$SERVER_IP" ]]; then
   echo "  3. Enable 'Sync to server'"
   echo "  4. Create account with same username on all devices"
   echo ""
+  echo "Mobile APK download:"
+  echo "  http://$SERVER_IP:$SERVER_PORT/apk/build-ledger.apk"
+  echo "  (Build the APK first - see BUILD_APK.md in the repo)"
+  echo ""
 else
   echo "Find your server's IP address and access: http://<your-ip>:$SERVER_PORT"
   echo ""
@@ -264,6 +281,6 @@ echo ""
 echo "To uninstall later:"
 echo "  systemctl disable --now build-ledger.service"
 echo "  rm /etc/systemd/system/build-ledger.service /etc/build-ledger.env"
-echo "  rm -rf $DATA_DIR $DOCS_DIR"
+echo "  rm -rf $DATA_DIR $DOCS_DIR $WEB_DIR/apk"
 echo ""
 echo "=============================================="

@@ -697,7 +697,7 @@ function showSetup(legacy){
 function showLogin(){
   lockUI(`<p class="mu">Enter your password to unlock.</p><div id="lf"><label for="p1">Password</label><input id="p1" type="password" autocomplete="current-password" required>
   <label for="s1">Server URL for sync (optional)</label><input id="s1" type="url" placeholder="https://your-server:8099"><div class="mu" id="lmsg" role="status"></div>
-  <div class="btns"><button type="button" onclick="$('#lf').onsubmit({preventDefault(){}})">Unlock</button></div></div>
+  <div class="btns"><button type="button" onclick="$('#lf').onsubmit({preventDefault(){}})">Unlock</button><button class="g" type="button" onclick="showLoginHelp()">Help</button></div></div>
   <div class="btns"><button class="g" id="fg">Forgot password?</button></div>`);
   $('#fg').onclick=showForgot;
   $('#lf').onsubmit=async e=>{e.preventDefault();const msg=$('#lmsg'),w=wait();if(w){msg.textContent=`Too many attempts. Wait ${w} seconds.`;return}
@@ -713,11 +713,36 @@ function showLogin(){
       if(AUTH.totp?.on)show2fa();else{passed();afterAuth()}}
     catch(err){KEY=null;META=null;failed();const w2=wait();msg.textContent=w2?`Wrong password. Too many attempts, wait ${w2} seconds.`:'Wrong password.';$('#p1').value=''}}
 }
+function showLoginHelp(){
+  const s=$('#s1').value.trim();
+  const apkUrl=s?`${s.replace(/\/$/,'')}/apk/build-ledger.apk`:'';
+  lockUI(`<h2 style="margin-top:0">Build Ledger Help</h2>
+  <p class="mu">Build Ledger is an end-to-end encrypted cost tracker for art/woodwork builds. Your data is encrypted on your device and never leaves it unless you configure a sync server.</p>
+  <div class="card"><b>Login Options:</b>
+  <table style="width:100%;font-size:13px;border-collapse:collapse;margin-top:8px">
+  <tr><th style="text-align:left">Password</th><th style="text-align:left">Server URL</th><th style="text-align:left">Result</th></tr>
+  <tr><td>✓ Filled</td><td>✗ Empty</td><td>Local-only mode. Data stays on this device in SQLite. No sync.</td></tr>
+  <tr><td>✓ Filled</td><td>✓ Filled</td><td>Cross-device sync. Encrypted vault syncs to your server via server.py.</td></tr>
+  <tr><td>✗ Empty</td><td>✓ Filled</td><td>Cannot login. Password is required to unlock your encrypted vault.</td></tr>
+  </table></div>
+  <div class="card"><b>Prerequisites:</b>
+  <ul style="font-size:12px;margin-top:4px">
+  <li>Browser with WebCrypto support (Chrome, Firefox, Safari, Edge)</li>
+  <li>HTTPS connection for WebCrypto to work (localhost also works)</li>
+  <li>For cross-device sync: server.py running on a machine with a stable HTTPS address</li>
+  <li>Same username and server URL on all devices you want to sync</li>
+  </ul></div>
+  <div class="card"><b>Mobile App (APK):</b>
+  <ul style="font-size:12px;margin-top:4px">
+  <li>Download the APK from your server: <code id="apk-url">${s?`${s.replace(/\/$/,'')}/apk/build-ledger.apk`:'Not configured - set Server URL above`}</code></li>
+  <li>Install on Android to save documents as real files in phone storage</li>
+  <li>The APK wraps this same web app in a Capacitor container</li>
+  </ul>
+  ${s?`<div class="btns" style="margin-top:8px"><a href="${s.replace(/\/$/,'')}/apk/build-ledger.apk" download><button type="button" class="g" style="width:100%">Download APK for Android</button></a></div>`:''}</div>
+  <div class="btns"><button class="g" id="lh-back">Back</button></div>`);
+  $('#lh-back').onclick=showLogin;
+}
 function showForgot(){
-  lockUI(`<p class="mu">If you saved your recovery key, you can reset your password and keep all your data. If you emailed it to yourself, search your mailbox for "Build Ledger recovery key", copy the key, and paste it on the next screen. Without a key, the only option is to erase this device and restore from an encrypted export.</p>
-  <div class="btns"><button id="fr">Reset with recovery key</button><button class="d" id="fe">Erase and restore from backup</button><button class="g" id="fb">Back</button></div>`);
-  $('#fr').onclick=showReset;$('#fe').onclick=eraseAll;$('#fb').onclick=showLogin}
-function showReset(){
   lockUI(`<p class="mu">Enter your recovery key and choose a new password. Two-factor authentication will be turned off so you can set it up again afterwards.</p>
   <div id="lf"><label for="rk1">Recovery key</label><input id="rk1" autocomplete="off" autocapitalize="characters" required>
   <div class="btns"><button type="button" class="g" id="rkp">Paste recovery key</button></div>
