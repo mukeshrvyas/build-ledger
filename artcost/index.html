@@ -6,7 +6,6 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#1F5C5A">
 <title>Build Ledger</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📒</text></svg>">
 <style>
 :root{--bg:#E9ECE8;--sf:#F8F9F7;--ink:#1B2527;--mu:#5E6B6E;--ac:#1F5C5A;--acx:#fff;--ln:#CBD2CD;--wn:#A4412F;color-scheme:light}
 @media(prefers-color-scheme:dark){:root{--bg:#141A1B;--sf:#1D2527;--ink:#E6ECEA;--mu:#93A09F;--ac:#6DBDB6;--acx:#0F1718;--ln:#2E3A3B;--wn:#E08A77;color-scheme:dark}}
@@ -190,14 +189,10 @@ function mergeItems(){
   ],
   v=>{if(v.keep==v.into){toast('Pick two different items');return false}
     const keep=I(v.keep),into=I(v.into);if(!keep||!into)return false;
-    // Average unit cost across all remaining lots
     const keepVal=ival(keep),keepQty=iq(keep),intoVal=ival(into),intoQty=iq(into);
     const totQty=r4(keepQty+intoQty),totVal=r4(keepVal+intoVal);
-    // Re-point all uses from 'into' to 'keep'
     db.uses.filter(u=>u.iid==into.id).forEach(u=>{u.iid=keep.id});
-    // Re-point all purchase lines from 'into' to 'keep'
     db.purchases.forEach(p=>{p.lines.filter(l=>l.iid==into.id).forEach(l=>{l.iid=keep.id;l.desc=keep.name})});
-    // Move all lots from 'into' to 'into'
     into.lots.forEach(l=>{l.id=uid();keep.lots.push(l)});
     keep.min=Math.max(keep.min??0,into.min??0);
     db.items=db.items.filter(x=>x.id!=into.id);
@@ -474,7 +469,6 @@ async function initSqlStorage(){
   db.run(`CREATE TABLE IF NOT EXISTS vault (key TEXT PRIMARY KEY, value TEXT, updated_at REAL)`);
   db.run(`CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT)`);
   SQL_DB=db;SQL_READY=true;
-  // Migrate from localStorage if exists
   const lsVault=localStorage.getItem(VK);
   if(lsVault){
     try{await sqlSaveVault(lsVault);localStorage.removeItem(VK);}catch(e){}
@@ -505,10 +499,8 @@ async function syncPush(){
   if(SYNC_BUSY)return {ok:false,reason:'busy'};
   SYNC_BUSY=true;
   try{
-    // Get current server revision
     let rev=0;
     try{const r=await fetch(SYNC_URL+'/api/kdf?user='+encodeURIComponent(AUTH.user||''));const j=await r.json();rev=j.rev||0}catch(e){}
-    // Build encrypted snapshot
     const k=KEY,m=META,snap=TE.encode(JSON.stringify({db,auth:AUTH}));
     const{iv,ct}=await aes(k,snap,'vault');
     const vault={v:3,salt:b64(m.salt),iter:m.iter,pw:{iv:b64(m.pw.iv),wk:b64(m.pw.wk)},rs:m.rs&&{salt:b64(m.rs.salt),iter:m.rs.iter,iv:b64(m.rs.iv),wk:b64(m.rs.wk)},iv:b64(iv),ct:b64(ct)};
@@ -532,7 +524,6 @@ async function syncPull(){
     const v=await resp.json();
     const dek=await unwrapDek(await kek(AUTH.pw||'',unb64(v.salt),v.iter),unb64(v.pw.iv),unb64(v.pw.wk));
     const o=JSON.parse(TD.decode(await unaes(dek,unb64(v.iv),unb64(v.ct),'vault')));
-    // Newest-edit-wins: if server vault is newer, replace local
     if(o.db&&o.db._syncTs&&db._syncTs&&o.db._syncTs>db._syncTs){
       db=o.db;AUTH=o.auth||AUTH;norm();save();SYNC_LAST=Date.now();
       return {ok:true,pulled:true,rev:v.rev};
@@ -600,7 +591,8 @@ function scanBtn(){const h=$('#sbody').querySelector('h2'),w=document.createElem
       for(const k in map){const el=$('#'+map[k]);if(el&&o[k]&&(!el.value||k=='date')){el.value=o[k];n++}}
       st$.textContent=n?`Filled ${n} field${n>1?'s':''}. Please check them before saving.`:'No details found. Try a clearer, well-lit photo.'}
     catch(err){st$.textContent='Could not read the photo. Check your internet connection and try again.'}}}
-
+</script>
+<script>
 /* ---------- zip export and import ---------- */
 const crcT=(()=>{const t=[];for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=c&1?0xEDB88320^(c>>>1):c>>>1;t[n]=c>>>0}return t})();
 const crc32=u=>{let c=0xFFFFFFFF;for(let i=0;i<u.length;i++)c=crcT[(c^u[i])&255]^(c>>>8);return (c^0xFFFFFFFF)>>>0};
@@ -646,212 +638,11 @@ async function impZip(f){
     if(!confirm('Replace all current data with this export?'))return;db=d;norm();let n=0;
     for(const m of db.docs){const k=Object.keys(z).find(x=>x.startsWith('documents/')&&x.includes('/'+m.id+'__'));if(k){await blobPut(m.id,new Blob([z[k]],{type:m.type}));n++}}
     save();go('list');toast(`Imported. ${n} document(s) restored`)}catch(e){toast('That file is not a valid export zip')}}
-
-/* ---------- reports ---------- */
-const REP={type:'sales',from:today().slice(0,8)+'01',to:today(),vid:'',cid:'',st:''};
-function repData(r){
-  const f=r.from||'0000-00-00',t=r.to||'9999-99-99',ok=d=>d>=f&&d<=t,T=r.type,by=(x,y)=>x[0].localeCompare(y[0]);
-  if(T=='sales')return{title:'Sales and invoices',head:['Date','Invoice','Customer','Project','Total','GST','Cost','Profit (ex GST)','Status'],mc:[4,5,6,7],sm:[4,5,6,7],
-    rows:db.bills.filter(b=>ok(b.date)&&(!r.cid||b.cid==r.cid)&&(!r.st||st(b)==r.st)).map(b=>[b.date,b.no,b.customer||'',P(b.pid)?.name||'',b.price,b.gst||0,b.cost,(b.net??b.price)-b.cost,st(b)]).sort(by)};
-  if(T=='pv'){const rows=[];db.purchases.filter(p=>ok(p.date)&&(!r.vid||p.vid==r.vid)).forEach(p=>p.lines.forEach(l=>rows.push([p.date,V(p.vid)?.name||'',p.inv||'',l.desc,l.iid?r4(l.qty)+' '+l.unit:'',l.net??l.price,l.gst||0,l.total??l.price])));
-    return{title:'Purchases from vendors',head:['Date','Vendor','Invoice','Item','Qty','Net','GST','Total'],mc:[5,6,7],sm:[5,6,7],rows:rows.sort(by)}}
-  if(T=='gst'){const c=db.bills.filter(b=>ok(b.date)).reduce((q,b)=>q+(b.gst||0),0),p=db.purchases.filter(x=>ok(x.date)).reduce((q,x)=>q+pGst(x),0);
-    return{title:'GST summary',head:['Item','Amount'],mc:[1],sm:[],rows:[['GST collected on sales',c],['GST paid on purchases',p],[c>=p?'Net GST payable':'Net GST refundable',Math.abs(c-p)]]}}
-  if(T=='cs'){const g={};db.bills.filter(b=>ok(b.date)).forEach(b=>{const k=b.cid||b.customer||'-',e=g[k]=g[k]||{n:C(b.cid)?.name||b.customer||'No customer',c:0,t:0,p:0};e.c++;e.t+=b.price;if(st(b)=='Paid')e.p+=b.price});
-    return{title:'Customer summary',head:['Customer','Invoices','Billed','Paid','Outstanding'],mc:[2,3,4],sm:[1,2,3,4],rows:Object.values(g).map(e=>[e.n,e.c,e.t,e.p,e.t-e.p])}}
-  if(T=='cd'||T=='vd'){const L=T=='cd'?db.customers:db.vendors;
-    return{title:T=='cd'?'Customer details':'Vendor details',head:['Name','Contact','Mobile','Phone','Email','Website','Alt contact','Alt phone','Alt email','Address','Tax no.','Account no.','Terms'],mc:[],sm:[],
-      rows:L.map(c=>[c.name,c.contact,c.mobile,c.phone,c.email,c.website,c.altname,c.altphone,c.altemail,[(c.address||'').replace(/\s*\n\s*/g,', '),c.city,c.state,c.postcode,c.country].filter(Boolean).join(' '),c.taxid,c.acct,c.terms].map(x=>x||''))}}
-  if(T=='pp')return{title:'Project profit',head:['Project','Status','Cost','Invoiced (ex GST)','Profit'],mc:[2,3,4],sm:[2,3,4],rows:db.projects.map(p=>{const c=pCost(p.id),i=db.bills.filter(b=>b.pid==p.id).reduce((q,b)=>q+(b.net??b.price),0);return[p.name,p.status,c,i,i-c]})};
-  if(T=='si')return{title:'Balance stock by item',head:['Item','On hand','Lots','Average cost','Value'],mc:[3,4],sm:[4],rows:db.items.filter(i=>iq(i)>0).map(i=>[i.name,r4(iq(i))+' '+i.unit,i.lots.filter(l=>l.rem>0).length,ival(i)/iq(i),ival(i)])};
-  const rows=[];db.items.forEach(i=>i.lots.filter(l=>l.rem>0).forEach(l=>rows.push([i.name,l.date||'Earlier',V(l.vid)?.name||'',l.inv||'',r4(l.rem)+' '+i.unit,l.uc,l.rem*l.uc])));
-  return{title:'Balance stock by lot',head:['Item','Purchased','Vendor','Invoice','On hand','Unit cost','Value'],mc:[5,6],sm:[6],rows:rows.sort(by)};
-}
-function repView(a){
-  const r=REP,d=repData(r),T=r.type,dt=['sales','cs','pv','gst'].includes(T);
-  const types=[['sales','Sales and invoices'],['gst','GST summary'],['cs','Customer summary'],['cd','Customer details'],['pv','Purchases from vendors'],['vd','Vendor details'],['pp','Project profit'],['sv','Balance stock (by lot)'],['si','Balance stock (by item)']];
-  const opt=(list,cur,all)=>`<option value="">${all}</option>`+list.map(x=>`<option value="${x[0]}" ${x[0]==cur?'selected':''}>${esc(x[1])}</option>`).join('');
-  const cell=(v,i)=>d.mc.includes(i)?m(v):esc(v),num=i=>d.mc.includes(i)?' style="text-align:right"':'';
-  a.innerHTML=`<h1>Reports</h1><div class="card"><label for="r1">Report</label><select id="r1" onchange="REP.type=this.value;render()">${types.map(([k,l])=>`<option value="${k}" ${k==T?'selected':''}>${l}</option>`).join('')}</select>
-  ${dt?`<div class="row"><div style="flex:1"><label for="r2">From</label><input id="r2" type="date" value="${r.from}" onchange="REP.from=this.value;render()"></div><div style="flex:1"><label for="r3">To</label><input id="r3" type="date" value="${r.to}" onchange="REP.to=this.value;render()"></div></div>`:''}
-  ${T=='pv'?`<label for="r4">Vendor</label><select id="r4" onchange="REP.vid=this.value;render()">${opt(db.vendors.map(v=>[v.id,v.name]),r.vid,'All vendors')}</select>`:''}
-  ${T=='sales'?`<label for="r5">Customer</label><select id="r5" onchange="REP.cid=this.value;render()">${opt(db.customers.map(v=>[v.id,v.name]),r.cid,'All customers')}</select><label for="r6">Status</label><select id="r6" onchange="REP.st=this.value;render()">${opt([['Paid','Paid'],['Unpaid','Unpaid']],r.st,'Paid and unpaid')}</select>`:''}</div>
-  <div id="rep" class="rc"><b>${esc(d.title)}</b>${dt?`<div class="mu">${esc(r.from)} to ${esc(r.to)}</div>`:''}<div style="overflow-x:auto;margin-top:8px"><table>
-  <tr>${d.head.map((h,i)=>`<th${num(i)}>${h}</th>`).join('')}</tr>
-  ${d.rows.map(x=>`<tr>${x.map((v,i)=>`<td${num(i)}>${cell(v,i)}</td>`).join('')}</tr>`).join('')||`<tr><td colspan="${d.head.length}" class="mu">No records for these filters.</td></tr>`}
-  ${d.sm.length&&d.rows.length?`<tr>${d.head.map((h,i)=>`<td${num(i)}><b>${i==0?'Total':d.sm.includes(i)?cell(d.rows.reduce((q,x)=>q+x[i],0),i):''}</b></td>`).join('')}</tr>`:''}</table></div></div>
-  <div class="btns"><button onclick="csvOut()">Export CSV</button><button class="g" onclick="prRep()">Print</button></div>`;
-}
-function csvOut(){const d=repData(REP),q=x=>'"'+String(x??'').replace(/"/g,'""')+'"';
-  const t=[d.head,...d.rows].map(r=>r.map(q).join(',')).join('\n');
-  download(new Blob([t],{type:'text/csv'}),`report-${REP.type}-${today()}.csv`)}
-function prRep(){document.body.classList.add('rp');addEventListener('afterprint',()=>document.body.classList.remove('rp'),{once:true});print()}
-
-/* ---------- views ---------- */
-function render(){
-  if(!KEY)return;
-  const a=$('#app');
-  $('#nav').innerHTML=[['list','Projects'],['stock','Stock'],['tools','Tools'],['books','Books'],['rep','Reports'],['more','More']].map(([k,l])=>{const active=((({proj:'list',vend:'books',cust:'books',purch:'books'})[S.v]||S.v)==k)?'on':'';return `<button class="${active}" onclick="go('${k}')">${l}</button>`;}).join('');
-  if(S.v=='list')a.innerHTML=`<div class="row"><h1>Projects</h1><button onclick="projForm()">New project</button></div>`+
-    (db.projects.map(p=>`<div class="card tap" onclick="go('proj','${p.id}')"><div class="row"><b>${esc(p.name)}</b><b>${m(pCost(p.id))}</b></div>
-      <div class="mu">${esc(p.status)}${p.ref?' · '+esc(p.ref):''}</div>${(p.tags||'').split(',').filter(t=>t.trim()).map(t=>`<span class="chip">${esc(t.trim())}</span>`).join('')}</div>`).join('')
-      ||'<p class="mu">No projects yet. Create one to start tracking its build cost.</p>');
-  else if(S.v=='proj')projView(a);
-  else if(S.v=='stock'){const low=db.items.filter(i=>i.min>0&&iq(i)<i.min);
-  let html='<div class="row"><h1>Stock</h1><button onclick="itemForm()">New item</button><button class="g" onclick="mergeItems()">Merge items</button></div>';
-  if(low.length)html+='<div class="card" style="border-color:var(--wn)"><div class="mu" style="color:var(--wn)">⚠ Low stock: '+low.map(i=>esc(i.name)+' ('+r4(iq(i))+' '+esc(i.unit)+', min '+r4(i.min)+')').join(', ')+'</div></div>';
-  db.items.forEach(i=>{const tq=i.lots.reduce((a,l)=>a+l.qty,0),pc=Math.max(0,Math.min(100,iq(i)/(tq||1)*100)),ls=i.lots.filter(l=>l.rem>0);
-    const isLow=i.min>0&&iq(i)<i.min;
-    const lowBadge=isLow?' <span style="color:var(--wn)">⚠ low</span>':'';
-    const lotHtml=ls.map(l=>`<div class="mu">${esc(l.date||'Earlier')} · ${r4(l.rem)} ${esc(i.unit)} @ ${m(l.uc)}</div>`).join('')||'<div class="mu">Out of stock</div>';
-    html+=`<div class="card tap${isLow?' low':''}" onclick="itemSheet('${i.id}')"><div class="row"><b>${esc(i.name)}${lowBadge}</b><span>${r4(iq(i))} ${esc(i.unit)}</span></div>${lotHtml}<div class="mu">Worth ${m(ival(i))}</div><div class="bar"><i style="width:${pc}%"></i></div></div>`;
-  });
-  html+='<p class="mu">Add what you buy in bulk (screws, glue, finish). Usage on projects will deduct from here.</p>';
-  a.innerHTML=html;
-}
-else if(S.v=='tools'){let html='<div class="row"><h1>Tools</h1><button onclick="toolForm()">New tool</button></div>';
-  db.tools.forEach(t=>{const pc=Math.min(100,t.used/t.life*100),par=t.parent&&db.tools.find(x=>x.id==t.parent);
-    const autoText=t.auto>0?' (auto '+r4(t.auto)+' per unit)':'';
-    const parHtml=par?'Accessory of '+esc(par.name)+autoText+' · ':'';
-    const barBg=t.used>t.life?';background:var(--wn)':'';
-    html+=`<div class="card tap" onclick="toolForm(db.tools.find(x=>x.id=='${t.id}'))"><div class="row"><b>${esc(t.name)}</b><span>${m(t.rate)} / ${esc(t.unit)}</span></div>
-    <div class="mu">${parHtml}${m(t.price)} bought · ${r4(t.used)} of ${r4(t.life)} ${esc(t.unit)} used</div><div class="bar"><i style="width:${pc}%${barBg}"></i></div></div>`;
-  });
-  html+='<p class="mu">Add tools and accessories you reuse across builds. Each use charges a share of the purchase price to the project.</p>';
-  a.innerHTML=html;
-}
-else if(S.v=='books')booksView(a);else if(S.v=='vend')vendView(a);else if(S.v=='cust')custView(a);else if(S.v=='purch')purchView(a);else if(S.v=='rep')repView(a);
-  else a.innerHTML=`<h1>More</h1>
-    <div class="card"><label for="s1">Business name on receipts</label><input id="s1" value="${esc(db.set.biz)}">
-    <label for="s4">Business details on invoices (address, ABN, phone)</label><textarea id="s4" rows="3">${esc(db.set.info)}</textarea>
-    <label for="s2">Invoice number prefix</label><input id="s2" value="${esc(db.set.prefix)}" maxlength="6">
-    <label for="s5">GST rate (%) used as the default on invoices</label><input id="s5" type="number" step="any" value="${db.set.gst??10}">
-    <label for="s3">Currency symbol</label><input id="s3" value="${esc(db.set.cur)}" maxlength="3">
-    <label for="slogo">Company logo on invoices (PNG/JPG, max ~200 KB)</label><input id="slogo" type="file" accept="image/*"><div class="mu">${db.set.logo?'Logo set ('+Math.round(db.set.logo.length/1024)+' KB)':'No logo yet'}</div>
-    <label><input type="checkbox" id="ssync"${db.set.syncLocal!==false?' checked':''}> Sync to server (${SYNC_ONLINE?'online':'offline'}) — uncheck to keep local only</label>
-    <label for="surl">Server URL</label><input id="surl" type="url" value="${SYNC_URL||''}" placeholder="https://your-server:8099"><div class="mu" id="syncStatus">${SYNC_QUEUE.length?`${SYNC_QUEUE.length} pending sync${SYNC_QUEUE.length>1?'s':''}`:'Synced'+(SYNC_LAST?' — last '+new Date(SYNC_LAST).toLocaleTimeString():'')}</div>
-    <div class="btns"><button onclick="saveSet()">Save settings</button><button class="g" onclick="logoPick()">Change logo</button><button class="g" onclick="logoClear()">Clear logo</button><button class="g" onclick="syncNow()">Sync now</button></div></div>
-    <div class="card"><b>Cloud backup</b><div class="mu">Back up your encrypted data to Google Drive or OneDrive. Restore on another device with the same password.</div>
-    <div class="btns"><button class="g" onclick="backupDrive()">Backup to Google Drive</button><button class="g" onclick="backupOneDrive()">Backup to OneDrive</button><button class="g" onclick="restoreCloud()">Restore from cloud</button></div></div>
-    <div class="card"><b>Security</b><div class="mu">Everything on this device is encrypted with AES-256-GCM. Your password (PBKDF2-SHA-256, 600,000 rounds) unlocks a random data key, and your recovery key can unlock it too if you forget the password.</div>
-    <div class="row" style="margin-top:8px"><span>Two-factor authentication</span><b>${AUTH?.totp?.on?'On':'Off'}</b></div>
-    <div class="row"><span>Recovery key</span><b>${META?.rs?'Set up':'Not set'}</b></div>
-    <div class="btns"><button onclick="${AUTH?.totp?.on?'twofaOff()':'twofaOn()'}">${AUTH?.totp?.on?'Turn off two-factor':'Turn on two-factor'}</button><button class="g" onclick="pwForm()">Change password</button><button class="g" onclick="recoveryNew()">New recovery key</button><button class="g" onclick="lock()">Lock now</button></div>
-    <label for="al">Lock automatically after</label><select id="al" onchange="AUTH.auto=+this.value;save();toast('Saved')">${[1,5,15,30].map(x=>`<option value="${x}" ${x==(AUTH?.auto||5)?'selected':''}>${x} minute${x>1?'s':''} idle</option>`).join('')}</select></div>
-    <div class="card"><p class="mu">Data, documents and photos are stored encrypted in this phone's browser, never on your server. The encrypted export includes everything plus the app code, so you can import it on another server or device.</p>
-    <div class="btns"><button onclick="exportEnc()">Export everything (encrypted)</button><button class="g" onclick="exportPlain()">Plain zip (not encrypted)</button><button class="g" onclick="$('#imp').click()">Import backup</button><button class="d" onclick="uninstall()">Uninstall — wipe all data</button></div>
-    <input id="imp" type="file" accept=".zip,.json,application/zip,application/json" hidden onchange="imp(this.files[0])"></div>`;
-}
-function projView(a){
-  const p=P(S.id);if(!p)return go('list');
-  const cost=pCost(p.id),price=cost*(1+p.margin/100);
-  const rows=[...db.uses.filter(u=>u.pid==p.id).map(u=>({k:'u',id:u.id,d:u.date,t:`${I(u.iid)?.name||'Item'} × ${r4(u.qty)} ${I(u.iid)?.unit||''}`,s:'From stock',a:u.cost})),
-    ...db.costs.filter(c=>c.pid==p.id).map(c=>({k:'c',id:c.id,d:c.date,t:c.desc,s:`${c.cat} · ${r4(c.qty)} × ${m(c.rate)}`,a:c.amt}))].sort((x,y)=>y.d.localeCompare(x.d));
-  const bycat={};rows.forEach(r=>{const c=r.k=='u'?'From stock':r.s.split(' · ')[0];bycat[c]=(bycat[c]||0)+r.a});
-  a.innerHTML=`<button class="g" onclick="go('list')">Back</button>
-  <div class="row" style="margin-top:12px"><h1>${esc(p.name)}</h1><button class="g" onclick="projForm(P('${p.id}'))">Edit</button></div>
-  <div class="mu">${esc(p.status)}${p.ref?' · Ref: '+esc(p.ref):''}</div>
-  ${(p.tags||'').split(',').filter(t=>t.trim()).map(t=>`<span class="chip">${esc(t.trim())}</span>`).join('')}
-  ${p.desc?`<p>${esc(p.desc)}</p>`:''}
-  <div class="card"><div class="mu">Total build cost</div><div class="big">${m(cost)}</div>
-  <div class="mu">With ${p.margin}% margin: <b>${m(price)}</b> (profit ${m(price-cost)})</div>
-  <div class="mu">${Object.entries(bycat).map(([k,v])=>`${esc(k)} ${m(v)}`).join(' · ')}</div></div>
-  <div class="btns"><button onclick="useForm('${p.id}')">Use stock</button><button onclick="useToolForm('${p.id}')">Use tool</button><button onclick="costForm('${p.id}')">Add cost</button><button class="g" onclick="billForm(P('${p.id}'))">Invoice</button><button class="g" onclick="pdfProject('${p.id}')">Export PDF</button></div>
-  <h2>Costs</h2>${rows.map(r=>`<div class="card"><div class="row"><b>${esc(r.t)}</b><b>${m(r.a)}</b></div><div class="row"><span class="mu">${esc(r.s)} · ${esc(r.d)}</span><button class="d" style="min-height:36px;padding:4px 10px" onclick="delEntry('${r.k}','${r.id}')">Delete</button></div></div>`).join('')||'<p class="mu">No costs yet. Use stock or add a cost above.</p>'}
-  ${db.bills.filter(b=>b.pid==p.id).length?`<h2>Invoices</h2>`+db.bills.filter(b=>b.pid==p.id).map(b=>`<div class="card tap" onclick="showBill('${b.id}')"><div class="row"><b>${esc(b.no)}</b><b>${m(b.price)}</b></div><div class="mu">${esc(b.date)} · ${st(b)} · cost was ${m(b.cost)}</div></div>`).join(''):''}
-  ${docsHTML('proj',p.id,p.name)}<div class="btns" style="margin-top:28px"><button class="d" onclick="delProject('${p.id}')">Delete project</button></div>`;docsRefresh('proj',p.id);
-}
-async function pdfProject(id){
-  const p=P(id);if(!p)return;
-  await loadPdf();
-  const cost=pCost(id),price=cost*(1+p.margin/100);
-  const rows=[...db.uses.filter(u=>u.pid==id).map(u=>({d:u.date,t:`${I(u.iid)?.name||'Item'} × ${r4(u.qty)} ${I(u.iid)?.unit||''}`,s:'From stock',a:u.cost})),
-    ...db.costs.filter(c=>c.pid==id).map(c=>({d:c.date,t:c.desc,s:`${c.cat} · ${r4(c.qty)} × ${m(c.rate)}`,a:c.amt}))].sort((x,y)=>y.d.localeCompare(x.d));
-  const body=[['Date','Description','Source','Amount']].concat(rows.map(r=>[r.d,r.t,r.s,m(r.a)]));
-  body.push(['','','Total',m(cost)]);
-  body.push(['','','With margin',m(price)]);
-  body.push(['','','Profit',m(price-cost)]);
-  const dd={content:[
-    {text:`Cost Breakdown — ${esc(p.name)}`,style:'h1',margin:[0,0,0,10]},
-    {text:`Project: ${esc(p.name)}  ·  Status: ${esc(p.status)}  ·  Ref: ${esc(p.ref||'')}\nTotal cost: ${m(cost)}  ·  ${p.margin}% margin price: ${m(price)}  ·  Profit: ${m(price-cost)}\nGenerated: ${today()}`,style:'sub',margin:[0,0,0,14]},
-    {text:'Costs',style:'h2',margin:[0,10,0,4]},
-    {table:{widths:['*','*','right','right'],body},layout:'lightHorizontalLines'},
-    {text:`\nTotal build cost: ${m(cost)}`,style:'total',margin:[0,10,0,0]}
-  ],styles:{h1:{fontSize:18,bold:true},sub:{fontSize:10,color:'#555'},h2:{fontSize:14,bold:true},total:{fontSize:12,bold:true,alignment:'right'}}};
-  window.pdfMake.createPdf(dd).download(`build-ledger-cost-${esc(p.name).replace(/\W/g,'_')}-${today()}.pdf`)
-}
-function saveSet(){db.set={biz:$('#s1').value.trim(),prefix:($('#s2').value.trim()||'ART').replace(/[^A-Za-z0-9]/g,''),cur:$('#s3').value.trim()||'$',info:$('#s4').value.trim(),gst:parseFloat($('#s5').value)||0,syncLocal:$('#ssync').checked};const surl=$('#surl').value.trim();SYNC_URL=surl||null;SYNC_ONLINE=!!surl;if(surl)detectServer();save();toast('Settings saved')}
-function logoPick(){
-  const inp=document.createElement('input');
-  inp.type='file';
-  inp.accept='image/*';
-  inp.onchange=async()=>{
-    const f=inp.files[0];
-    if(!f)return;
-    if(f.size>250000){toast('Logo too large (max 250 KB)');return}
-    const b=await shrink(f);
-    const url=URL.createObjectURL(b);
-    sheet('Company logo',[{k:'data',l:'',opts:[[url,'Preview']]}],
-      v=>{db.set.logo=url;save();render();return true},
-      'Use this logo',
-      `<img src="${url}" style="max-width:100%;border-radius:8px;margin-top:8px"><div class="mu">The logo is stored encrypted with your data and appears on invoices.</div>`);
-    inp.click();
-  };
-}
-function logoClear(){if(!db.set.logo){toast('No logo to clear');return}db.set.logo='';save();render();toast('Logo cleared')}
-async function uninstall(){
-  if(!confirm('Uninstall will ERASE everything: all projects, stock, invoices, documents, photos, encryption keys, and server data. This cannot be undone. Export a backup first if you want to keep your data. Continue?'))return;
-  if(!confirm('Type ERASE to confirm permanent deletion of all Build Ledger data from this device and server.'))return;
-  const confirm2=prompt('Type ERASE to confirm:');if(confirm2!='ERASE'){toast('Uninstall cancelled');return}
-  // Wipe server vault and docs if sync is configured
-  if(SYNC_URL&&AUTH&&AUTH.user){
-    try{await fetch(SYNC_URL+'/api/account',{method:'DELETE',headers:{'X-User':AUTH.user,'X-Auth':AUTH.authHash}})}catch(e){}
-  }
-  try{const d=await idb();const txn=d.transaction('blobs','readwrite');const store=txn.objectStore('blobs');await new Promise((res,rej)=>{store.clear();txn.oncomplete=res;txn.onerror=rej})}catch(e){}
-  localStorage.removeItem(VK);localStorage.removeItem(FK);localStorage.removeItem(K);
-  if(SQL_READY){SQL_DB.run(`DELETE FROM vault`);SQL_DB.run(`DELETE FROM kv`)}
-  KEY=null;META=null;AUTH=null;SYNC_URL=null;SYNC_ONLINE=false;SYNC_QUEUE=[];db=fresh();norm();save();
-  toast('All Build Ledger data has been wiped from this device and server');setTimeout(()=>location.reload(),1000)}
-async function backupDrive(){
-  if(!AUTH||!AUTH.pw){toast('Unlock the app first');return}
-  try{const{blob}=await buildZip(true);const enc=await encryptBytes(AUTH.pw,new Uint8Array(await blob.arrayBuffer()));
-    const f=new File([enc],`build-ledger-backup-${today()}.blx`,{type:'application/octet-stream'});
-    if(showSavePicker){const h=await showSavePicker({suggestedName:f.name,types:[{accept:{'application/octet-stream':['.blx']}}]});if(h){const w=await h.createWritable();await w.write(f);await w.close();toast('Saved to Google Drive (File System Access)')}}
-    else{download(new Blob([enc]),f.name);toast('Backup ready — upload to Google Drive manually')}}
-  catch(e){toast('Cloud backup failed: '+e.message)}}
-async function backupOneDrive(){
-  if(!AUTH||!AUTH.pw){toast('Unlock the app first');return}
-  try{const{blob}=await buildZip(true);const enc=await encryptBytes(AUTH.pw,new Uint8Array(await blob.arrayBuffer()));
-    const f=new File([enc],`build-ledger-backup-${today()}.blx`,{type:'application/octet-stream'});
-    if(showSavePicker){const h=await showSavePicker({suggestedName:f.name,types:[{accept:{'application/octet-stream':['.blx']}}]});if(h){const w=await h.createWritable();await w.write(f);await w.close();toast('Saved to OneDrive (File System Access)')}}
-    else{download(new Blob([enc]),f.name);toast('Backup ready — upload to OneDrive manually')}}
-  catch(e){toast('Cloud backup failed: '+e.message)}}
-async function restoreCloud(){
-  if(!AUTH||!AUTH.pw){toast('Unlock the app first');return}
-  const inp=document.createElement('input');inp.type='file';inp.accept='.blx,.zip';inp.hidden=true;
-  inp.onchange=async()=>{const f=inp.files[0];if(!f)return;const buf=await f.arrayBuffer(),u=new Uint8Array(buf);
-    if(u.length>36&&TD.decode(u.slice(0,4))=='BLX1'){try{const z=await decryptBytes(AUTH.pw,u);await impZip(z.buffer.slice(z.byteOffset,z.byteOffset+z.byteLength));toast('Cloud backup restored')}catch(e){toast('Wrong password or damaged backup')}}
-    else{if(/\.zip$/i.test(f.name)){await impZip(buf);toast('Backup restored')}else{toast('Unknown backup format')}}};
-  document.body.append(inp);inp.click();setTimeout(()=>inp.remove(),100)}
-function exp(){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(db,null,1)],{type:'application/json'}));a.download=`build-ledger-${today()}.json`;a.click()}
-async function imp(f){if(!f)return;const buf=await f.arrayBuffer(),u=new Uint8Array(buf);
-  if(u.length>36&&TD.decode(u.slice(0,4))=='BLX1'){
-    sheet('Encrypted export',[{k:'pw',l:'Export password',t:'password',req:1}],v=>{(async()=>{try{toast('Decrypting…');const z=await decryptBytes(v.pw,u);await impZip(z.buffer.slice(z.byteOffset,z.byteOffset+z.byteLength))}catch(e){toast('Wrong password or damaged file')}})();return true},'Decrypt and import');return}
-  if(/\.zip$/i.test(f.name)||(u[0]==0x50&&u[1]==0x4b))return impZip(buf);
-  try{const d=JSON.parse(TD.decode(u));if(!d.projects||!d.items)throw 0;if(confirm('Replace all current data with this backup?')){db=d;norm();save();go('list');toast('Backup restored')}}catch(e){toast('That file is not a valid backup')}}
-
-/* ---------- encrypted export files ---------- */
-const download=(b,n)=>{const u=URL.createObjectURL(b),a=document.createElement('a');a.href=u;a.download=n;a.target='_blank';a.rel='noopener';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),60000)};
-async function copyText(t){try{await navigator.clipboard.writeText(t);return true}catch(e){}
-  try{const x=document.createElement('textarea');x.value=t;x.style.cssText='position:fixed;opacity:0;top:0';document.body.append(x);x.select();x.setSelectionRange(0,99999);const ok=document.execCommand('copy');x.remove();return !!ok}catch(e){return false}}
-function selectEl(el){try{const r=document.createRange();r.selectNodeContents(el);const g=getSelection();g.removeAllRanges();g.addRange(r)}catch(e){}}
-async function encryptBytes(pw,u8){const salt=rnd(16),key=await deriveKey(pw,salt,ITER),{iv,ct}=await aes(key,u8,'BLX1'),o=new Uint8Array(36+ct.length);
-  o.set(TE.encode('BLX1'));o.set(salt,4);new DataView(o.buffer).setUint32(20,ITER);o.set(iv,24);o.set(ct,36);return o}
-async function decryptBytes(pw,u8){const iter=new DataView(u8.buffer,u8.byteOffset).getUint32(20);if(iter<1e5||iter>5e6)throw new Error('bad');
-  return unaes(await deriveKey(pw,u8.slice(4,20),iter),u8.slice(24,36),u8.slice(36),'BLX1')}
 function exportEnc(){
   const hasDocs=db.docs&&db.docs.length>0;
-  sheet('Encrypted export',[{k:'p1',l:'Export password (at least 10 characters)',t:'password',req:1},{k:'p2',l:'Confirm export password',t:'password',req:1},...(hasDocs?[{k:'docs',l:'Include photos and documents in export',v:'1',opts:[['1','Yes'],'0','No']]}:[])],
+  const fields=[{k:'p1',l:'Export password (at least 10 characters)',t:'password',req:1},{k:'p2',l:'Confirm export password',t:'password',req:1}];
+  if(hasDocs){fields.push({k:'docs',l:'Include photos and documents',v:'1',opts:[['1','Yes'],'0','No']})}
+  sheet('Encrypted export',fields,
     v=>{if(v.p1!==v.p2||!pwOk(v.p1)){toast(v.p1!==v.p2?'Passwords do not match':'Use at least 10 characters');return false}
       const includeDocs=!hasDocs||v.docs!=='0';
       (async()=>{const{blob,missing}=await buildZip(includeDocs);toast('Encrypting…');download(new Blob([await encryptBytes(v.p1,new Uint8Array(await blob.arrayBuffer()))],{type:'application/octet-stream'}),`build-ledger-export-${today()}.blx`);toast(missing?`Exported. ${missing} document(s) were missing`:'Encrypted export ready')})();return true},
@@ -863,8 +654,14 @@ function exportPlain(){
     v=>{const includeDocs=!hasDocs||v.docs!=='0';
       buildZip(includeDocs).then(({blob,missing})=>{download(blob,`build-ledger-export-${today()}.zip`);toast(missing?`Exported. ${missing} document(s) were missing`:'Export ready')})},
     'Export','WARNING: This zip is NOT encrypted. Anyone with the file can read your business data.')}
-
-/* ---------- password, two-factor, lock ---------- */
+function download(b,n){const u=URL.createObjectURL(b),a=document.createElement('a');a.href=u;a.download=n;a.target='_blank';a.rel='noopener';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),60000)}
+async function copyText(t){try{await navigator.clipboard.writeText(t);return true}catch(e){}
+  try{const x=document.createElement('textarea');x.value=t;x.style.cssText='position:fixed;opacity:0;top:0';document.body.append(x);x.select();x.setSelectionRange(0,99999);const ok=document.execCommand('copy');x.remove();return !!ok}catch(e){return false}}
+function selectEl(el){try{const r=document.createRange();r.selectNodeContents(el);const g=getSelection();g.removeAllRanges();g.addRange(r)}catch(e){}}
+async function encryptBytes(pw,u8){const salt=rnd(16),key=await deriveKey(pw,salt,ITER),{iv,ct}=await aes(key,u8,'BLX1'),o=new Uint8Array(36+ct.length);
+  o.set(TE.encode('BLX1'));o.set(salt,4);new DataView(o.buffer).setUint32(20,ITER);o.set(iv,24);o.set(ct,36);return o}
+async function decryptBytes(pw,u8){const iter=new DataView(u8.buffer,u8.byteOffset).getUint32(20);if(iter<1e5||iter>5e6)throw new Error('bad');
+  return unaes(await deriveKey(pw,u8.slice(4,20),iter),u8.slice(24,36),u8.slice(36),'BLX1')}
 const pwOk=p=>p.length>=10&&!/^(.)\1+$/.test(p)&&!/^(password|1234567890|qwertyuiop)/i.test(p);
 const wait=()=>{try{return Math.max(0,Math.ceil(((JSON.parse(localStorage.getItem(FK))?.until||0)-Date.now())/1000))}catch(e){return 0}};
 const failed=()=>{let f={n:0};try{f=JSON.parse(localStorage.getItem(FK))||f}catch(e){}f.n++;if(f.n>=5)f.until=Date.now()+Math.min(3600e3,30e3*2**(f.n-5));localStorage.setItem(FK,JSON.stringify(f))};
@@ -904,8 +701,7 @@ function showLogin(){
   $('#lf').onsubmit=async e=>{e.preventDefault();const msg=$('#lmsg'),w=wait();if(w){msg.textContent=`Too many attempts. Wait ${w} seconds.`;return}
     msg.textContent='Unlocking…';const pw=$('#p1').value;
     try{const v=JSON.parse(await sqlLoadVault());let o;
-      if(v.v==2){/* older vault: move to a random data key that a recovery key can also unlock */
-        const old=await deriveKey(pw,unb64(v.salt),v.iter);o=JSON.parse(TD.decode(await unaes(old,unb64(v.iv),unb64(v.ct),'vault')));
+      if(v.v==2){const old=await deriveKey(pw,unb64(v.salt),v.iter);o=JSON.parse(TD.decode(await unaes(old,unb64(v.iv),unb64(v.ct),'vault')));
         KEY=await newDek();const salt=rnd(16);META={salt,iter:ITER,pw:await wrapDek(await kek(pw,salt,ITER),KEY),rs:null};
         db=o.db;AUTH=o.auth||{totp:null,rec:[],auto:5,user:null,authHash:sha(pw),pw};norm();await flush();
         for(const d of db.docs){const r=await tx('readonly',s=>s.get(d.id)).catch(()=>null);if(r&&r.iv)await blobPut(d.id,new Blob([await unaes(old,r.iv,r.ct,d.id)],{type:r.type}))}}
@@ -952,16 +748,9 @@ function showRecoveryKey(rk,rs,done){
   $('#rkc').onclick=async()=>{if(await copyText(g))toast('Copied');else{selectEl($('#rkk'));$('#lmsg').textContent='Copying is blocked here. The key is selected: press and hold it, then choose Copy.'}};
   $('#rke').onclick=()=>{const a=$('#rke1').value.trim();if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(a)){$('#lmsg').textContent='Enter a valid email address first.';return}
     if(!confirm('Emailing the key means your email account can unlock your data. Continue?'))return;AUTH.email=a;save();
-    const body=`Your Build Ledger recovery key:\r\n\r\n${g}\r\n\r\nTo use it: open the app, tap Forgot password, then Reset with recovery key. Anyone with this key can unlock your data, so delete this email once it is stored somewhere safer.`,
-      url=`mailto:${a}?subject=${encodeURIComponent('Build Ledger recovery key')}&body=${encodeURIComponent(body)}`;
-    const l=document.createElement('a');l.href=url;l.target='_blank';l.rel='noopener';document.body.append(l);l.click();l.remove();
-    const e=encodeURIComponent,sj='Build Ledger recovery key',
-      web=[['Gmail',`https://mail.google.com/mail/?view=cm&fs=1&to=${e(a)}&su=${e(sj)}&body=${e(body)}`],['Outlook',`https://outlook.live.com/mail/0/deeplink/compose?to=${e(a)}&subject=${e(sj)}&body=${e(body)}`],['Yahoo',`https://compose.mail.yahoo.com/?to=${e(a)}&subject=${e(sj)}&body=${e(body)}`]];
-    $('#rkem').innerHTML=`<div class="mu">If your mail app did not open (no mail app set up, or this window blocks it), pick the email service you use. Only choose your own provider, because the message is sent to it.</div>
-    <div class="btns">${web.map(([n,u])=>`<a href="${esc(u)}" target="_blank" rel="noopener" style="flex:1;text-decoration:none"><button type="button" class="g" style="width:100%">${n}</button></a>`).join('')}${navigator.share?'<button type="button" class="g" id="rksh">Share…</button>':''}</div>
-    <div class="mu">Or copy the message and paste it into an email to ${esc(a)}.</div><textarea readonly rows="6" id="rkmb">${esc(body)}</textarea><div class="btns"><button type="button" class="g" id="rkmc">Copy message</button></div>`;
-    const sh=$('#rksh');if(sh)sh.onclick=()=>navigator.share({title:sj,text:body}).catch(()=>{});
-    $('#rkmc').onclick=async()=>{if(await copyText(body))toast('Copied');else{$('#rkmb').select();toast('Copying is blocked here. Select the text and copy it.')}}};
+    const body=`Your Build Ledger recovery key:\r\n\r\n${g}\r\n\r\nTo use it: open the app, tap Forgot password, then Reset with recovery key. Anyone with this key can unlock your data, so delete this email once it is stored somewhere safer.`;
+    const url=`mailto:${a}?subject=${encodeURIComponent('Build Ledger recovery key')}&body=${encodeURIComponent(body)}`;
+    const l=document.createElement('a');l.href=url;l.target='_blank';l.rel='noopener';document.body.append(l);l.click();l.remove();}
   $('#rkd').onclick=()=>{download(new Blob([`Build Ledger recovery key\r\nCreated ${today()}\r\n\r\n${g}\r\n\r\nAnyone with this key can unlock your data. Keep it safe and separate from your phone.\r\n`],{type:'text/plain'}),'build-ledger-recovery-key.txt');$('#lmsg').textContent='If nothing downloaded, copy the key from the screen instead.'};
   $('#rkok').onclick=async()=>{if(rkNorm($('#rkv').value)!==rk.slice(-4)){$('#lmsg').textContent='The last 4 characters do not match.';return}META.rs=rs;await flush();done()}}
 function recoveryNew(){sheet('Make a new recovery key',[{k:'pw',l:'Your password',t:'password',req:1}],
@@ -1001,16 +790,14 @@ function showCodes(rc){$('#sbody').innerHTML=`<h2 style="margin-top:0">Save your
   <div class="btns"><button id="cpy" class="g">Copy codes</button><button id="scx">I have saved them</button></div>`;
   $('#sheet').classList.add('open');$('#scx').onclick=close;$('#cpy').onclick=async()=>toast(await copyText(rc.join('\n'))?'Copied':'Copying is blocked here. Select the codes and copy them manually.')}
 function twofaOff(){sheet('Turn off two-factor authentication',[{k:'code',l:'Current 6-digit code or a recovery code',req:1}],
-  v=>{(async()=>{const ok=/^\d{6}$/.test(v.code.replace(/\s/g,''))?await checkCode(v.code):await checkRecovery(v.code);if(!ok){toast('That code did not match');return}AUTH.totp=null;AUTH.rec=[];save();close();render();toast('Two-factor turned off')})();return false},'Turn off')}
+  v=>{(async()=>{const ok=/^\d{6}$/.test(c.replace(/\s/g,''))?await checkCode(c):await checkRecovery(c);if(!ok){toast('That code did not match');return}AUTH.totp=null;AUTH.rec=[];save();close();render();toast('Two-factor turned off')})();return false},'Turn off')}
 ['pointerdown','keydown','touchstart','scroll'].forEach(e=>addEventListener(e,()=>{_last=Date.now()},{passive:true,capture:true}));
 setInterval(()=>{if(KEY&&AUTH&&Date.now()-_last>(AUTH.auto||5)*60000)lock()},10000);
 document.addEventListener('visibilitychange',()=>{if(document.hidden)flush();else if(KEY&&AUTH&&Date.now()-_last>(AUTH.auto||5)*60000)lock()});
 addEventListener('pagehide',()=>flush());
 async function boot(){
   if(!window.crypto?.subtle){lockUI('<p>Encryption needs a secure connection. Open this page through your https address (for example your Nabu Casa or reverse-proxy URL), not plain http.</p>');return}
-  // Always show UI immediately — check localStorage first (synchronous, no CDN dependency)
   if(localStorage.getItem(VK))showLogin();else showSetup(localStorage.getItem(K))
-  // Initialize SQL storage in background (does not block UI)
   sqlLoadVault().catch(()=>{})
 }
 boot();
