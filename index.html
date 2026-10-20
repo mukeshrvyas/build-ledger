@@ -683,7 +683,7 @@ function showSetup(legacy){
   <label for="p2">Confirm password</label><input id="p2" type="password" autocomplete="new-password" required>
   <label for="u1">Sync username (same on all your devices)</label><input id="u1" type="text" placeholder="optional — leave blank for local-only">
   <label for="s1">Server URL for sync (optional)</label><input id="s1" type="url" placeholder="https://your-server:8099"><div class="mu" id="lmsg" role="status"></div>
-  <div class="btns"><button type="button" onclick="$('#lf').onsubmit({preventDefault(){}})">Create encrypted vault</button></div></div>`);
+  <div class="btns"><button type="button" onclick="$('#lf').onsubmit({preventDefault(){}})">Create encrypted vault</button><button class="g" type="button" onclick="showLoginHelp()">Help</button></div></div>`);
   $('#lf').onsubmit=async e=>{e.preventDefault();const a=$('#p1').value,msg=$('#lmsg'),u=$('#u1').value.trim(),s=$('#s1').value.trim();
     if(a!==$('#p2').value){msg.textContent='Passwords do not match.';return}if(!pwOk(a)){msg.textContent='Use at least 10 characters and avoid common passwords.';return}
     msg.textContent='Encrypting your data…';
