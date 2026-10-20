@@ -691,7 +691,7 @@ function prRep(){document.body.classList.add('rp');addEventListener('afterprint'
 function render(){
   if(!KEY)return;
   const a=$('#app');
-  $('#nav').innerHTML=[['list','Projects'],['stock','Stock'],['tools','Tools'],['books','Books'],['rep','Reports'],['more','More']].map(([k,l])=>`<button class="${((({proj:'list',vend:'books',cust:'books',purch:'books'})[S.v]||S.v)==k)?'on':''}" onclick="go('${k}')">${l}</button>`).join('');
+  $('#nav').innerHTML=[['list','Projects'],['stock','Stock'],['tools','Tools'],['books','Books'],['rep','Reports'],['more','More']].map(([k,l])=>{const active=((({proj:'list',vend:'books',cust:'books',purch:'books'})[S.v]||S.v)==k)?'on':'';return `<button class="${active}" onclick="go('${k}')">${l}</button>`;}).join('');
   if(S.v=='list')a.innerHTML=`<div class="row"><h1>Projects</h1><button onclick="projForm()">New project</button></div>`+
     (db.projects.map(p=>`<div class="card tap" onclick="go('proj','${p.id}')"><div class="row"><b>${esc(p.name)}</b><b>${m(pCost(p.id))}</b></div>
       <div class="mu">${esc(p.status)}${p.ref?' · '+esc(p.ref):''}</div>${(p.tags||'').split(',').filter(t=>t.trim()).map(t=>`<span class="chip">${esc(t.trim())}</span>`).join('')}</div>`).join('')
