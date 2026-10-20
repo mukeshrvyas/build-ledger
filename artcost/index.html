@@ -716,6 +716,7 @@ function showLogin(){
 function showLoginHelp(){
   const s=$('#s1').value.trim();
   const apkUrl=s?`${s.replace(/\/$/,'')}/apk/build-ledger.apk`:'';
+  const apkLabel=s?apkUrl:'Not configured - set Server URL above';
   lockUI(`<h2 style="margin-top:0">Build Ledger Help</h2>
   <p class="mu">Build Ledger is an end-to-end encrypted cost tracker for art/woodwork builds. Your data is encrypted on your device and never leaves it unless you configure a sync server.</p>
   <div class="card"><b>Login Options:</b>
@@ -734,11 +735,11 @@ function showLoginHelp(){
   </ul></div>
   <div class="card"><b>Mobile App (APK):</b>
   <ul style="font-size:12px;margin-top:4px">
-  <li>Download the APK from your server: <code id="apk-url">${s?`${s.replace(/\/$/,'')}/apk/build-ledger.apk`:'Not configured - set Server URL above`}</code></li>
+  <li>Download the APK from your server: <code id="apk-url">${apkLabel}</code></li>
   <li>Install on Android to save documents as real files in phone storage</li>
   <li>The APK wraps this same web app in a Capacitor container</li>
   </ul>
-  ${s?`<div class="btns" style="margin-top:8px"><a href="${s.replace(/\/$/,'')}/apk/build-ledger.apk" download><button type="button" class="g" style="width:100%">Download APK for Android</button></a></div>`:''}</div>
+  ${s?`<div class="btns" style="margin-top:8px"><a href="${apkUrl}" download><button type="button" class="g" style="width:100%">Download APK for Android</button></a></div>`:''}</div>
   <div class="btns"><button class="g" id="lh-back">Back</button></div>`);
   $('#lh-back').onclick=showLogin;
 }
