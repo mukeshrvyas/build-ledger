@@ -698,18 +698,26 @@ function render(){
       ||'<p class="mu">No projects yet. Create one to start tracking its build cost.</p>');
   else if(S.v=='proj')projView(a);
   else if(S.v=='stock'){const low=db.items.filter(i=>i.min>0&&iq(i)<i.min);
-  a.innerHTML=`<div class="row"><h1>Stock</h1><button onclick="itemForm()">New item</button><button class="g" onclick="mergeItems()">Merge items</button></div>`+
-    (low.length?`<div class="card" style="border-color:var(--wn)"><div class="mu" style="color:var(--wn)">⚠ Low stock: ${low.map(i=>esc(i.name)+' ('+r4(iq(i))+' '+esc(i.unit)+', min '+r4(i.min)+')').join(', ')}</div></div>`:'')+
-    (db.items.map(i=>{const tq=i.lots.reduce((a,l)=>a+l.qty,0),pc=Math.max(0,Math.min(100,iq(i)/(tq||1)*100)),ls=i.lots.filter(l=>l.rem>0);
-      const lotRows=ls.map(l=>`<div class="mu">${esc(l.date||'Earlier')} · ${r4(l.rem)} ${esc(i.unit)} @ ${m(l.uc)}</div>`).join('')||'<div class="mu">Out of stock</div>';
-      return `<div class="card tap${i.min>0&&iq(i)<i.min?' low':'':''}" onclick="itemSheet('${i.id}')"><div class="row"><b>${esc(i.name)}${i.min>0&&iq(i)<i.min?' <span style="color:var(--wn)">⚠ low</span>':''}</b><span>${r4(iq(i))} ${esc(i.unit)}</span></div>${lotRows}<div class="mu">Worth ${m(ival(i))}</div><div class="bar"><i style="width:${pc}%"></i></div></div>`
-    }).join('')+
-    '<p class="mu">Add what you buy in bulk (screws, glue, finish). Usage on projects will deduct from here.</p>');
-  else if(S.v=='tools')a.innerHTML=`<div class="row"><h1>Tools</h1><button onclick="toolForm()">New tool</button></div>`+
-    (db.tools.map(t=>{const pc=Math.min(100,t.used/t.life*100),par=t.parent&&db.tools.find(x=>x.id==t.parent);
-      return `<div class="card tap" onclick="toolForm(db.tools.find(x=>x.id=='${t.id}'))"><div class="row"><b>${esc(t.name)}</b><span>${m(t.rate)} / ${esc(t.unit)}</span></div>
-      <div class="mu">${par?'Accessory of '+esc(par.name)+(t.auto>0?` (auto ${r4(t.auto)} per unit)`:'')+' · ':''}${m(t.price)} bought · ${r4(t.used)} of ${r4(t.life)} ${esc(t.unit)} used</div><div class="bar"><i style="width:${pc}%${t.used>t.life?';background:var(--wn)':''}"></i></div></div>`}).join('')
-      ||'<p class="mu">Add tools and accessories you reuse across builds. Each use charges a share of the purchase price to the project.</p>');
+  let html='<div class="row"><h1>Stock</h1><button onclick="itemForm()">New item</button><button class="g" onclick="mergeItems()">Merge items</button></div>';
+  if(low.length)html+='<div class="card" style="border-color:var(--wn)"><div class="mu" style="color:var(--wn)">⚠ Low stock: '+low.map(i=>esc(i.name)+' ('+r4(iq(i))+' '+esc(i.unit)+', min '+r4(i.min)+')').join(', ')+'</div></div>';
+  db.items.forEach(i=>{const tq=i.lots.reduce((a,l)=>a+l.qty,0),pc=Math.max(0,Math.min(100,iq(i)/(tq||1)*100)),ls=i.lots.filter(l=>l.rem>0);
+    const isLow=i.min>0&&iq(i)<i.min;
+    const lowBadge=isLow?' <span style="color:var(--wn)">⚠ low</span>':'';
+    const lotHtml=ls.map(l=>`<div class="mu">${esc(l.date||'Earlier')} · ${r4(l.rem)} ${esc(i.unit)} @ ${m(l.uc)}</div>`).join('')||'<div class="mu">Out of stock</div>';
+    html+=`<div class="card tap${isLow?' low':''}" onclick="itemSheet('${i.id}')"><div class="row"><b>${esc(i.name)}${lowBadge}</b><span>${r4(iq(i))} ${esc(i.unit)}</span></div>${lotHtml}<div class="mu">Worth ${m(ival(i))}</div><div class="bar"><i style="width:${pc}%"></i></div></div>`;
+  });
+  html+='<p class="mu">Add what you buy in bulk (screws, glue, finish). Usage on projects will deduct from here.</p>';
+  a.innerHTML=html;
+  else if(S.v=='tools'){let html='<div class="row"><h1>Tools</h1><button onclick="toolForm()">New tool</button></div>';
+  db.tools.forEach(t=>{const pc=Math.min(100,t.used/t.life*100),par=t.parent&&db.tools.find(x=>x.id==t.parent);
+    const autoText=t.auto>0?' (auto '+r4(t.auto)+' per unit)':'';
+    const parHtml=par?'Accessory of '+esc(par.name)+autoText+' · ':'';
+    const barBg=t.used>t.life?';background:var(--wn)':'';
+    html+=`<div class="card tap" onclick="toolForm(db.tools.find(x=>x.id=='${t.id}'))"><div class="row"><b>${esc(t.name)}</b><span>${m(t.rate)} / ${esc(t.unit)}</span></div>
+    <div class="mu">${parHtml}${m(t.price)} bought · ${r4(t.used)} of ${r4(t.life)} ${esc(t.unit)} used</div><div class="bar"><i style="width:${pc}%${barBg}"></i></div></div>`;
+  });
+  html+='<p class="mu">Add tools and accessories you reuse across builds. Each use charges a share of the purchase price to the project.</p>';
+  a.innerHTML=html;
   else if(S.v=='books')booksView(a);else if(S.v=='vend')vendView(a);else if(S.v=='cust')custView(a);else if(S.v=='purch')purchView(a);else if(S.v=='rep')repView(a);
   else a.innerHTML=`<h1>More</h1>
     <div class="card"><label for="s1">Business name on receipts</label><input id="s1" value="${esc(db.set.biz)}">
