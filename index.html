@@ -71,8 +71,17 @@ const unaes=(key,iv,ct,aad)=>crypto.subtle.decrypt({name:'AES-GCM',iv,additional
 const sha=async x=>[...new Uint8Array(await crypto.subtle.digest('SHA-256',TE.encode(x)))].map(b=>b.toString(16).padStart(2,'0')).join('');
 const save=()=>{if(KEY){db._syncTs=Date.now();clearTimeout(_t);_t=setTimeout(flush,60)}};
 function flush(){clearTimeout(_t);if(!KEY||!AUTH)return _busy;const k=KEY,m=META,snap=TE.encode(JSON.stringify({db,auth:AUTH}));
-  _busy=_busy.then(async()=>{try{const{iv,ct}=await aes(k,snap,'vault');const vault={v:3,salt:b64(m.salt),iter:m.iter,pw:{iv:b64(m.pw.iv),wk:b64(m.pw.wk)},rs:m.rs&&{salt:b64(m.rs.salt),iter:m.rs.iter,iv:b64(m.rs.iv),wk:b64(m.rs.wk)},iv:b64(iv),ct:b64(ct)};const vaultJson=JSON.stringify(vault);await sqlSaveVault(vaultJson);localStorage.setItem(VK,vaultJson)}catch(e){toast('Could not save: storage is full or blocked')}}
-    .then(async()=>{if(SYNC_ONLINE&&SYNC_URL&&!db.set.syncLocal){try{await syncPush()}catch(e){}}});return _busy}
+  _busy=_busy.then(async()=>{
+    try{
+      const{iv,ct}=await aes(k,snap,'vault');
+      const vault={v:3,salt:b64(m.salt),iter:m.iter,pw:{iv:b64(m.pw.iv),wk:b64(m.pw.wk)},rs:m.rs&&{salt:b64(m.rs.salt),iter:m.rs.iter,iv:b64(m.rs.iv),wk:b64(m.rs.wk)},iv:b64(iv),ct:b64(ct)};
+      const vaultJson=JSON.stringify(vault);
+      await sqlSaveVault(vaultJson);
+      localStorage.setItem(VK,vaultJson);
+    }catch(e){toast('Could not save: storage is full or blocked')}
+  }).then(async()=>{
+    if(SYNC_ONLINE&&SYNC_URL&&!db.set.syncLocal){try{await syncPush()}catch(e){}}
+  });return _busy}
 
 const $=s=>document.querySelector(s),uid=()=>Math.random().toString(36).slice(2,10);
 norm();
