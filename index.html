@@ -681,25 +681,27 @@ function showSetup(legacy){
   lockUI(`<p class="mu">Create a password to encrypt your data on this device.${legacy?' Your existing data will be encrypted.':''} Next you will get a recovery key. Keep it safe: it is the only way to reset a forgotten password.</p>
   <div id="lf"><label for="p1">Password (at least 10 characters)</label><input id="p1" type="password" autocomplete="new-password" required>
   <label for="p2">Confirm password</label><input id="p2" type="password" autocomplete="new-password" required>
-  <label for="u1">Sync username (same on all your devices)</label><input id="u1" type="text" placeholder="optional — leave blank for local-only"><div class="mu" id="lmsg" role="status"></div>
+  <label for="u1">Sync username (same on all your devices)</label><input id="u1" type="text" placeholder="optional — leave blank for local-only">
+  <label for="s1">Server URL for sync (optional)</label><input id="s1" type="url" placeholder="https://your-server:8099"><div class="mu" id="lmsg" role="status"></div>
   <div class="btns"><button type="button" onclick="$('#lf').onsubmit({preventDefault(){}})">Create encrypted vault</button></div></div>`);
-  $('#lf').onsubmit=async e=>{e.preventDefault();const a=$('#p1').value,msg=$('#lmsg'),u=$('#u1').value.trim();
+  $('#lf').onsubmit=async e=>{e.preventDefault();const a=$('#p1').value,msg=$('#lmsg'),u=$('#u1').value.trim(),s=$('#s1').value.trim();
     if(a!==$('#p2').value){msg.textContent='Passwords do not match.';return}if(!pwOk(a)){msg.textContent='Use at least 10 characters and avoid common passwords.';return}
     msg.textContent='Encrypting your data…';
     try{let d=fresh();if(legacy){try{d=JSON.parse(legacy)}catch(_){}}
       KEY=await newDek();const salt=rnd(16);META={salt,iter:ITER,pw:await wrapDek(await kek(a,salt,ITER),KEY),rs:null};
       AUTH={totp:null,rec:[],auto:5,user:u||null,authHash:sha(a),pw:a};db=d;norm();await flush();
-      if(u){SYNC_URL='/';SYNC_ONLINE=true;enqueueSync({op:'register',ts:Date.now()})}
+      SYNC_URL=s||null;SYNC_ONLINE=!!s;if(u&&s){enqueueSync({op:'register',ts:Date.now()})}
       if(!await sqlLoadVault())throw new Error('save');await migrateBlobs();localStorage.removeItem(K);afterAuth()}
     catch(err){KEY=null;msg.textContent='Something went wrong. Please try again.'}}
 }
 function showLogin(){
   lockUI(`<p class="mu">Enter your password to unlock.</p><div id="lf"><label for="p1">Password</label><input id="p1" type="password" autocomplete="current-password" required>
-  <div class="mu" id="lmsg" role="status"></div><div class="btns"><button type="button" onclick="$('#lf').onsubmit({preventDefault(){}})">Unlock</button></div></div>
+  <label for="s1">Server URL for sync (optional)</label><input id="s1" type="url" placeholder="https://your-server:8099"><div class="mu" id="lmsg" role="status"></div>
+  <div class="btns"><button type="button" onclick="$('#lf').onsubmit({preventDefault(){}})">Unlock</button></div></div>
   <div class="btns"><button class="g" id="fg">Forgot password?</button></div>`);
   $('#fg').onclick=showForgot;
   $('#lf').onsubmit=async e=>{e.preventDefault();const msg=$('#lmsg'),w=wait();if(w){msg.textContent=`Too many attempts. Wait ${w} seconds.`;return}
-    msg.textContent='Unlocking…';const pw=$('#p1').value;
+    msg.textContent='Unlocking…';const pw=$('#p1').value,s=$('#s1').value.trim();
     try{const v=JSON.parse(await sqlLoadVault());let o;
       if(v.v==2){const old=await deriveKey(pw,unb64(v.salt),v.iter);o=JSON.parse(TD.decode(await unaes(old,unb64(v.iv),unb64(v.ct),'vault')));
         KEY=await newDek();const salt=rnd(16);META={salt,iter:ITER,pw:await wrapDek(await kek(pw,salt,ITER),KEY),rs:null};
@@ -707,6 +709,7 @@ function showLogin(){
         for(const d of db.docs){const r=await tx('readonly',s=>s.get(d.id)).catch(()=>null);if(r&&r.iv)await blobPut(d.id,new Blob([await unaes(old,r.iv,r.ct,d.id)],{type:r.type}))}}
       else{META=metaOf(v);const dek=await unwrapDek(await kek(pw,META.salt,META.iter),META.pw.iv,META.pw.wk);
         o=JSON.parse(TD.decode(await unaes(dek,unb64(v.iv),unb64(v.ct),'vault')));KEY=dek;db=o.db;AUTH=o.auth||{totp:null,rec:[],auto:5,user:null,authHash:sha(pw),pw};norm()}
+      SYNC_URL=s||null;SYNC_ONLINE=!!s;
       if(AUTH.totp?.on)show2fa();else{passed();afterAuth()}}
     catch(err){KEY=null;META=null;failed();const w2=wait();msg.textContent=w2?`Wrong password. Too many attempts, wait ${w2} seconds.`:'Wrong password.';$('#p1').value=''}}
 }
