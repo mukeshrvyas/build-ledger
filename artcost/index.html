@@ -708,7 +708,8 @@ function render(){
   });
   html+='<p class="mu">Add what you buy in bulk (screws, glue, finish). Usage on projects will deduct from here.</p>';
   a.innerHTML=html;
-  else if(S.v=='tools'){let html='<div class="row"><h1>Tools</h1><button onclick="toolForm()">New tool</button></div>';
+}
+else if(S.v=='tools'){let html='<div class="row"><h1>Tools</h1><button onclick="toolForm()">New tool</button></div>';
   db.tools.forEach(t=>{const pc=Math.min(100,t.used/t.life*100),par=t.parent&&db.tools.find(x=>x.id==t.parent);
     const autoText=t.auto>0?' (auto '+r4(t.auto)+' per unit)':'';
     const parHtml=par?'Accessory of '+esc(par.name)+autoText+' · ':'';
@@ -718,7 +719,8 @@ function render(){
   });
   html+='<p class="mu">Add tools and accessories you reuse across builds. Each use charges a share of the purchase price to the project.</p>';
   a.innerHTML=html;
-  else if(S.v=='books')booksView(a);else if(S.v=='vend')vendView(a);else if(S.v=='cust')custView(a);else if(S.v=='purch')purchView(a);else if(S.v=='rep')repView(a);
+}
+else if(S.v=='books')booksView(a);else if(S.v=='vend')vendView(a);else if(S.v=='cust')custView(a);else if(S.v=='purch')purchView(a);else if(S.v=='rep')repView(a);
   else a.innerHTML=`<h1>More</h1>
     <div class="card"><label for="s1">Business name on receipts</label><input id="s1" value="${esc(db.set.biz)}">
     <label for="s4">Business details on invoices (address, ABN, phone)</label><textarea id="s4" rows="3">${esc(db.set.info)}</textarea>
