@@ -980,6 +980,11 @@ document.addEventListener('visibilitychange',()=>{if(document.hidden)flush();els
 addEventListener('pagehide',()=>flush());
 async function boot(){
   if(!window.crypto?.subtle){lockUI('<p>Encryption needs a secure connection. Open this page through your https address (for example your Nabu Casa or reverse-proxy URL), not plain http.</p>');return}
-  if(await sqlLoadVault()||localStorage.getItem(VK))showLogin();else showSetup(localStorage.getItem(K))}
+  try{
+    if(await sqlLoadVault()||localStorage.getItem(VK))showLogin();else showSetup(localStorage.getItem(K))
+  }catch(e){
+    // If SQL storage fails, fall back to localStorage
+    if(localStorage.getItem(VK))showLogin();else showSetup(localStorage.getItem(K))
+  }}
 boot();
 </script></body></html>
