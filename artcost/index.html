@@ -781,7 +781,23 @@ async function pdfProject(id){
   window.pdfMake.createPdf(dd).download(`build-ledger-cost-${esc(p.name).replace(/\W/g,'_')}-${today()}.pdf`)
 }
 function saveSet(){db.set={biz:$('#s1').value.trim(),prefix:($('#s2').value.trim()||'ART').replace(/[^A-Za-z0-9]/g,''),cur:$('#s3').value.trim()||'$',info:$('#s4').value.trim(),gst:parseFloat($('#s5').value)||0,syncLocal:$('#ssync').checked};const surl=$('#surl').value.trim();SYNC_URL=surl||null;SYNC_ONLINE=!!surl;if(surl)detectServer();save();toast('Settings saved')}
-function logoPick(){const inp=document.createElement('input');inp.type='file';inp.accept='image/*';inp.onchange=async()=>{const f=inp.files[0];if(!f)return;if(f.size>250000){toast('Logo too large (max 250 KB)');return}const b=await shrink(f);const url=URL.createObjectURL(b);sheet('Company logo',[{k:'data',l:'',opts:[[url,'Preview']]}],v=>{db.set.logo=url;save();render();return true},'Use this logo',`<img src="${url}" style="max-width:100%;border-radius:8px;margin-top:8px"><div class="mu">The logo is stored encrypted with your data and appears on invoices.</div>`});inp.click()};
+function logoPick(){
+  const inp=document.createElement('input');
+  inp.type='file';
+  inp.accept='image/*';
+  inp.onchange=async()=>{
+    const f=inp.files[0];
+    if(!f)return;
+    if(f.size>250000){toast('Logo too large (max 250 KB)');return}
+    const b=await shrink(f);
+    const url=URL.createObjectURL(b);
+    sheet('Company logo',[{k:'data',l:'',opts:[[url,'Preview']]}],
+      v=>{db.set.logo=url;save();render();return true},
+      'Use this logo',
+      `<img src="${url}" style="max-width:100%;border-radius:8px;margin-top:8px"><div class="mu">The logo is stored encrypted with your data and appears on invoices.</div>`);
+    inp.click();
+  };
+}
 function logoClear(){if(!db.set.logo){toast('No logo to clear');return}db.set.logo='';save();render();toast('Logo cleared')}
 async function uninstall(){
   if(!confirm('Uninstall will ERASE everything: all projects, stock, invoices, documents, photos, encryption keys, and server data. This cannot be undone. Export a backup first if you want to keep your data. Continue?'))return;
